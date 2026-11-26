@@ -4,13 +4,13 @@
 >
 > Lee primero [`CLAUDE.md`](../CLAUDE.md) para las reglas no negociables del proyecto y comandos en OneDrive.
 
-- **Ultima actualizacion:** `2026-11-26T14:42-05:00`
-- **Base validada previa:** `v0.1.0` (`515 passed` + `M6` UX Estilo Adobe)
-- **Version entregada:** `0.2.0` (`PDF/MD Lector · by TRODAI`)
+- **Ultima actualizacion:** `2026-11-26T20:50Z`
+- **Base validada previa:** `v0.2.0` (`M7`, GitHub Release `v0.2.0`)
+- **Version entregada:** `0.3.0` (`PDF/MD Lector · by TRODAI`)
 
 ---
 
-## 1. Mapa de Hitos (M1–M7 + Pista E2E)
+## 1. Mapa de Hitos (M1–M8 + Pista E2E)
 
 | Hito | Alcance principal | Estado actual | Notas / Dependencias |
 |---|---|---|---|
@@ -21,7 +21,8 @@
 | **M4** | SVGs poligonales, `AdaptiveButton`, `DialogLocalizer`, `TourDialog`, `updater.py` (24h, `Solo offline`, SHA-256, banner solido), `HubView` (`Acciones Rapidas` dinamicas + `232x104`), `ToolWorkspace`, dialogos (`Invoice`, `Preferences`, `Notifications`, `Support`, `Diagnostics`, `AboutUpdater`), Theme Studio (Hub + canvas exterior), `MainWindow`/`SplashScreen`/`app.py` (< 300 ms) | **COMPLETED** (`tests/test_m4_ui_updater.py` + `fa01/03/04/05/17/18/19/20` + arranque `273.56 ms`) | Verificaciones visuales aprobadas por Neon en `final_screenshots/` |
 | **M5** | Windows 11 `HKCU` + CLI, `browser-extension/` (MV3) + `native_messaging.py`, API REST perezosa (`127.0.0.1` + Bearer), Panel IA (BM25 + BYOK + MCP cliente) + `mcp_server.py` (`pdf-md-lector-mcp`), `scripts/build_exe.py`, `scripts/sign_local.ps1`, `packaging/installer.iss`, `.github/workflows/build-release.yml`, docs OSS y auditoria multi-IA | **COMPLETED** (`tests/test_m5_integrations_ai_mcp.py` + `tests/test_m5_packaging_docs.py` + `fa21..fa25`) | `sign_local.ps1 -DryRun` exit `0` |
 | **M6** | Pase completo E2E Tiers 1–4 + suite unitaria (`515/515`), compilacion real `build_exe.py` + `SHA256SUMS.txt` + prueba Splash `.exe`, `sign_local.ps1 -DryRun`, capturas reales claro/oscuro (`980x650`, `1200x760`, `1366x720`), Git local `main` + commits semanticos + `git notes` + tag `v0.1.0` | **COMPLETED** (`515 passed`, build + smoke + capturas + Git local `v0.1.0`) | Sin remoto ni `git push` |
-| **M7 (`v0.2.0`)** | Fixes `ToolCard.mousePressEvent` (`shiboken6.isValid`) y `DocumentRagIndex.index_pdf` (`pypdf`), compuerta hardware IA Local (`ai_hardware.py`) + API BYOK / MCP Oficial legal, diccionario morfologico + `suggest_fuzzy` + Wiktionary opt-in cacheado, notas adhesivas arrastrables con tarjeta flotante + `NotesPanel` (`/Subj`), autoguardado y recuperacion ante cierre inesperado (`autosave.py`), actualizacion directa GitHub Releases y publicacion publica `v0.2.0` | **COMPLETED** (`test_m7_v020_features`: `8 passed in 5.81s`; `test_tier1_features`: `189 passed in 136.55s`; `test_fixtures_smoke` + `test_tier2_boundaries` + `test_tier3_pairwise` + `test_tier4_workloads`: `230 passed in 423.61s`; `build_exe.py` firmado `Valid`) | Repo publico MIT + GitHub Release `v0.2.0` |
+| **M7 (`v0.2.0`)** | Fixes `ToolCard.mousePressEvent` (`shiboken6.isValid`) y `DocumentRagIndex.index_pdf` (`pypdf`), compuerta hardware IA Local (`ai_hardware.py`) + API BYOK / MCP Oficial legal, diccionario morfologico + `suggest_fuzzy` + Wiktionary opt-in cacheado, notas adhesivas arrastrables con tarjeta flotante + `NotesPanel` (`/Subj`), autoguardado y recuperacion ante cierre inesperado (`autosave.py`), actualizacion directa GitHub Releases y publicacion publica `v0.2.0` | **COMPLETED** (`test_m7_v020_features`: `8 passed`; `test_tier1_features`: `189 passed`; Tiers 2–4 + smoke: `230 passed`; `build_exe.py` firmado `Valid`) | Repo publico MIT + GitHub Release `v0.2.0` |
+| **M8 (`v0.3.0`)** | Botones flotantes sin recuadros e iconos centrados (`32x32` `iconOnly="true"`, cero recortes, `FlowContainer`), TopBar/Visor depurados sin duplicados, idioma fijo desde instalador (`read_installer_language`), Wiktionary por defecto con parser wikitext `w/api.php` + fallback REST `en.wiktionary.org` + sugerencias `opensearch` + cache SQLite, busqueda en documento (`Ctrl+F`) con resaltado PDFium, impresion del sistema (`Ctrl+P` `PrintPdfDialog` con `QPrinterInfo`), Modo Presentacion (`F5` / `Ctrl+L` + compatibilidad con apuntadores inalambricos + HUD inferior ocultable), listado de atajos (`F1` `ShortcutsDialog`), movimiento reactivo al puntero exclusivo en Hero del Hub (`motion_engine.py`), release firmado `v0.3.0` | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/prototype`: `85 passed in 147.91s`; E2E `test_tier1_features` + `v0.3.0`; `FIRST_FRAME_MS=62.36`; live Wiktionary ES/EN OK; capturas `v4/` verificadas) | GitHub Release `v0.3.0` |
 
 ---
 

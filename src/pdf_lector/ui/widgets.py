@@ -120,6 +120,33 @@ class FlowLayout(QLayout):
         return y + line_height - rect.y() + bottom
 
 
+class FlowContainer(QWidget):
+    """QWidget host forwarding heightForWidth to its FlowLayout so wrapped buttons never clip."""
+
+    def __init__(self, parent: QWidget | None = None, *, margin: int = 0, h_spacing: int = 5, v_spacing: int = 5) -> None:
+        super().__init__(parent)
+        self.setObjectName("TransparentHost")
+        self._flow = FlowLayout(self, margin=margin, h_spacing=h_spacing, v_spacing=v_spacing)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+
+    @property
+    def flow_layout(self) -> FlowLayout:
+        return self._flow
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._flow.heightForWidth(width)
+
+    def sizeHint(self) -> QSize:
+        w = self.width() if self.width() > 20 else 260
+        return QSize(w, max(24, self._flow.heightForWidth(w)))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+
 class AdaptiveButton(QPushButton):
     """PushButton ensuring full text fit and adaptive multi-variant labels across widths."""
 

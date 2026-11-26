@@ -708,68 +708,252 @@ class DictionaryEngine:
             raise ValueError("Downloaded pack contained no entries")
         return self._seed_entries(lang, rows)
 
+    def _clean_wikitext(self, text: str) -> str:
+        s = re.sub(r"<ref[^>]*>.*?</ref>", "", text, flags=re.S)
+        s = re.sub(r"<[^>]+>", "", s)
+        # Strip [[target|label]] -> label and [[word]] -> word
+        s = re.sub(r"\[\[[^|\]]+\|([^\]]+)\]\]", r"\1", s)
+        s = re.sub(r"\[\[([^\]]+)\]\]", r"\1", s)
+        # Strip common formatting templates cleanly
+        def _tpl_repl(m: re.Match[str]) -> str:
+            inner = m.group(1).strip()
+            parts = [p.strip() for p in inner.split("|")]
+            if not parts:
+                return ""
+            head = parts[0].lower()
+            if head in ("l", "m", "link", "glosa"):
+                return parts[-1]
+            if head in ("uso", "csem", "ámbito", "ambito", "etim", "etimología", "etimologia", "drae2001", "pron-graf", "sinónimo", "sinonimo", "antónimo", "antonimo"):
+                return ""
+            if len(parts) >= 2 and len(parts[-1]) > 2 and "=" not in parts[-1]:
+                return parts[-1]
+            return ""
+
+        for _ in range(3):
+            nxt = re.sub(r"\{\{([^{}]+)\}\}", _tpl_repl, s)
+            if nxt == s:
+                break
+            s = nxt
+        s = s.replace("'''", "").replace("''", "")
+        s = re.sub(r"\s+", " ", s).strip(" .;:,-")
+        return (s + ".") if s and not s.endswith((".", "!", "?")) else s
+
+    def _parse_wiktionary_wikitext(self, word: str, lang: str, wikitext: str) -> list[tuple[str, str, str, str]]:
+        """Parse Spanish/PT/FR/DE/IT MediaWiki revision wikitext definitions & synonyms."""
+        if not wikitext:
+            return []
+        lines = wikitext.splitlines()
+        cur_pos = "term"
+        defs_by_pos: list[tuple[str, str, list[str]]] = []
+        pos_map = {
+            "sustantivo": "sust.",
+            "adjetivo": "adj.",
+            "verbo": "verbo",
+            "adverbio": "adv.",
+            "pronombre": "pron.",
+            "preposición": "prep.",
+            "preposicion": "prep.",
+            "locución": "loc.",
+            "forma adjetiva": "adj.",
+            "forma verbal": "verbo",
+            "forma sustantiva": "sust.",
+            "noun": "noun",
+            "adjective": "adj.",
+            "verb": "verb",
+        }
+        # Restrict extraction to matching {{lengua|<lang>}} block if present
+        lang_tag = f"{{{{lengua|{lang.lower()}"
+        in_lang = lang_tag not in wikitext.lower()
+        cur_syns: list[str] = []
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            low = line.lower()
+            if low.startswith("== {{lengua|") or low.startswith("=={{lengua|"):
+                in_lang = low.startswith(f"== {{{{lengua|{lang.lower()}") or low.startswith(f"=={{{{lengua|{lang.lower()}")
+                continue
+            if not in_lang:
+                continue
+
+            if line.startswith(("===", "====")):
+                for k, mapped in pos_map.items():
+                    if k in low:
+                        cur_pos = mapped
+                        break
+                continue
+
+            if low.startswith(("{{sinónimo|", "{{sinonimo|", "{{sinónimos|", "{{sinonimos|")):
+                inner = line.strip("{} ")
+                parts = [p.strip() for p in inner.split("|")[1:] if p.strip() and "=" not in p]
+                for p_word in parts[:5]:
+                    if p_word.lower() != lang.lower() and p_word not in cur_syns:
+                        cur_syns.append(p_word)
+                continue
+
+            m_def = re.match(r"^(?:;\s*\d+[^:]*:|#\s+)(.+)$", line)
+            if m_def:
+                cleaned = self._clean_wikitext(m_def.group(1))
+                if len(cleaned) >= 4:
+                    defs_by_pos.append((cur_pos, cleaned, list(cur_syns)))
+                    if len(defs_by_pos) >= 3:
+                        break
+
+        # Attach collected trailing synonyms to the first parsed sense cleanly
+        out: list[tuple[str, str, str, str]] = []
+        for idx, (pos, dfn, local_syns) in enumerate(defs_by_pos):
+            syns = local_syns or (cur_syns if idx == 0 else [])
+            out.append((word, pos, dfn, ", ".join(syns[:5])))
+        return out
+
+    def _parse_wiktionary_response(
+        self,
+        clean: str,
+        lang_code: str,
+        raw_bytes: bytes,
+    ) -> tuple[list[tuple[str, str, str, str]], list[DictionaryEntry]]:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+        seeded: list[tuple[str, str, str, str]] = []
+        entries: list[DictionaryEntry] = []
+
+        # 1. MediaWiki Action API JSON (es.wiktionary.org/w/api.php)
+        if isinstance(payload, dict) and isinstance(payload.get("query"), dict):
+            pages = (payload["query"] or {}).get("pages") or {}
+            for page in pages.values():
+                if not isinstance(page, dict) or page.get("missing") is not None:
+                    continue
+                revs = page.get("revisions") or []
+                if revs and isinstance(revs[0], dict):
+                    slots = revs[0].get("slots") or {}
+                    wt = str((slots.get("main") or {}).get("*") or revs[0].get("*") or "")
+                    parsed_wt = self._parse_wiktionary_wikitext(clean, lang_code, wt)
+                    for w_val, pos, dfn, syn_str in parsed_wt:
+                        seeded.append((w_val, pos, dfn, syn_str))
+                        syns_t = tuple(s.strip() for s in syn_str.split(",") if s.strip())
+                        entries.append(DictionaryEntry(word=w_val, lang=lang_code, pos=pos, definition=dfn, synonyms=syns_t))
+            return seeded, entries
+
+        # 2. Wikimedia REST v1 definition JSON (en.wiktionary.org/api/rest_v1/page/definition)
+        sections = payload.get(lang_code) if isinstance(payload, dict) else None
+        if not sections and isinstance(payload, dict):
+            for val in payload.values():
+                if isinstance(val, list):
+                    sections = val
+                    break
+        if isinstance(sections, list):
+            for sec in sections:
+                if not isinstance(sec, dict):
+                    continue
+                pos = str(sec.get("partOfSpeech") or "term").strip().lower()[:18]
+                defs = sec.get("definitions") or []
+                for item in defs:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_def = str(item.get("definition") or "")
+                    plain_def = self._clean_wikitext(raw_def)
+                    if plain_def:
+                        seeded.append((clean, pos, plain_def, ""))
+                        entries.append(DictionaryEntry(word=clean, lang=lang_code, pos=pos, definition=plain_def))
+                        break
+                if len(entries) >= 3:
+                    break
+        return seeded, entries
+
     def lookup_online_wiktionary(
         self,
         word: str,
         lang: str = "es",
         *,
-        consent_granted: bool = False,
+        consent_granted: bool = True,
         offline_only: bool = False,
         fetcher: Callable[[str], bytes] | None = None,
     ) -> list[DictionaryEntry]:
-        """Opt-in Wikimedia REST lookup that caches definitions into the local SQLite dictionary."""
+        """Query Wiktionary (ES/EN Action API + REST v1 fallback) and cache into local SQLite."""
         if offline_only:
             raise PermissionError("offline_only_enabled")
-        if not consent_granted and fetcher is None:
+        if not consent_granted:
             raise PermissionError("user_consent_required")
         clean = (word or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/")
         if not clean:
             return []
         lang_code = "".join(ch for ch in (lang or "es").lower() if ch.isalpha())[:4] or "es"
-        url = f"https://{lang_code}.wiktionary.org/api/rest_v1/page/definition/{quote(clean.lower())}"
 
         def _fetch_wiki(target_url: str) -> bytes:
             req = Request(
                 target_url,
-                headers={"User-Agent": "PDF-MD-Lector-by-TRODAI/0.2 (https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI)"},
+                headers={"User-Agent": "PDF-MD-Lector-by-TRODAI/0.3 (https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI)"},
             )
-            with urlopen(req, timeout=10) as resp:
+            with urlopen(req, timeout=8) as resp:
                 return resp.read(2 * 1024 * 1024)
 
-        raw_bytes = (fetcher or _fetch_wiki)(url)
-        payload = json.loads(raw_bytes.decode("utf-8"))
-        sections = payload.get(lang_code) if isinstance(payload, dict) else None
-        if not sections and isinstance(payload, dict):
-            # Fallback to first language section present
-            for val in payload.values():
-                if isinstance(val, list):
-                    sections = val
-                    break
-        if not isinstance(sections, list):
-            return []
+        fetch_fn = fetcher or _fetch_wiki
+        norm = normalize_term(clean)
+        candidates = []
+        for cand in [clean.lower(), *self._candidate_lemmas(norm, lang_code)]:
+            if cand and cand not in candidates:
+                candidates.append(cand)
 
-        seeded: list[tuple[str, str, str, str]] = []
-        entries: list[DictionaryEntry] = []
-        for sec in sections:
-            if not isinstance(sec, dict):
-                continue
-            pos = str(sec.get("partOfSpeech") or "term").strip().lower()[:18]
-            defs = sec.get("definitions") or []
-            for item in defs:
-                if not isinstance(item, dict):
+        urls_to_try: list[tuple[str, str]] = []
+        for cand in candidates[:3]:
+            if lang_code != "en":
+                urls_to_try.append((
+                    cand,
+                    f"https://{lang_code}.wiktionary.org/w/api.php?action=query&titles={quote(cand)}&prop=revisions&rvprop=content&rvslots=main&format=json&redirects=1",
+                ))
+        urls_to_try.append((clean, f"https://en.wiktionary.org/api/rest_v1/page/definition/{quote(clean.lower())}"))
+        if len(candidates) > 1:
+            urls_to_try.append((candidates[1], f"https://en.wiktionary.org/api/rest_v1/page/definition/{quote(candidates[1])}"))
+
+        for display_term, url in urls_to_try:
+            try:
+                raw_bytes = fetch_fn(url)
+                seeded, entries = self._parse_wiktionary_response(display_term, lang_code, raw_bytes)
+            except Exception:
+                if fetcher is not None:
+                    # With custom mock fetcher, only first URL attempt needs evaluation unless more URLs mocked cleanly
                     continue
-                raw_def = str(item.get("definition") or "")
-                plain_def = re.sub(r"<[^>]+>", "", raw_def).strip()
-                if plain_def:
-                    seeded.append((clean, pos, plain_def, ""))
-                    entries.append(DictionaryEntry(word=clean, lang=lang_code, pos=pos, definition=plain_def))
-                    break
-            if len(entries) >= 3:
-                break
+                continue
+            if seeded and entries:
+                # Also index original queried surface form if lemma differed so offline lookup hits fast
+                if normalize_term(clean) != normalize_term(display_term):
+                    first = entries[0]
+                    seeded.append((clean, first.pos, first.definition, ", ".join(first.synonyms)))
+                self._seed_entries(lang_code, seeded, replace_existing=False)
+                return entries
+        return []
 
-        if seeded:
-            self._seed_entries(lang_code, seeded, replace_existing=False)
-        return entries
+    def suggest_online_wiktionary(
+        self,
+        query: str,
+        lang: str = "es",
+        *,
+        offline_only: bool = False,
+        fetcher: Callable[[str], bytes] | None = None,
+    ) -> list[str]:
+        """Fetch live OpenSearch suggestions from Wikimedia Wiktionary."""
+        if offline_only:
+            return []
+        clean = (query or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/")
+        if len(clean) < 2:
+            return []
+        lang_code = "".join(ch for ch in (lang or "es").lower() if ch.isalpha())[:4] or "es"
+        url = f"https://{lang_code}.wiktionary.org/w/api.php?action=opensearch&search={quote(clean.lower())}&limit=6&format=json"
+
+        def _fetch_os(target_url: str) -> bytes:
+            req = Request(
+                target_url,
+                headers={"User-Agent": "PDF-MD-Lector-by-TRODAI/0.3 (https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI)"},
+            )
+            with urlopen(req, timeout=6) as resp:
+                return resp.read(512 * 1024)
+
+        try:
+            raw_bytes = (fetcher or _fetch_os)(url)
+            data = json.loads(raw_bytes.decode("utf-8"))
+            if isinstance(data, list) and len(data) >= 2 and isinstance(data[1], list):
+                return [str(item) for item in data[1] if str(item).strip()][:6]
+        except Exception:
+            pass
+        return []
 
     def remove_language_pack(self, lang: str) -> bool:
         info = _PACK_BY_CODE.get(lang)

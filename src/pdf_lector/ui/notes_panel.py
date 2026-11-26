@@ -328,9 +328,14 @@ class NotesPanel(QFrame):
                 border: 1px solid {p["border_strong"]};
             }}
             QPushButton#NotesHeaderBtn {{
-                background-color: {p["bg_glass_elevated"]};
-                border: 1px solid {p["border_strong"]};
-                padding: 3px;
+                background-color: transparent;
+                border: 1px solid transparent;
+                padding: 0px;
+                text-align: center;
+            }}
+            QPushButton#NotesHeaderBtn:hover {{
+                background-color: {p["bg_hover"]};
+                border: 1px solid transparent;
             }}
             """
         )

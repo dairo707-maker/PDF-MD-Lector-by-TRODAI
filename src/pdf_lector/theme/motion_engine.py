@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Callable
 
 from PIL import Image, ImageFilter
-from PySide6.QtCore import QEasingCurve, QPoint, QPointF, QPropertyAnimation, QSize, QTimer, Qt
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QSize, QTimer, Qt
 from PySide6.QtGui import QColor, QImage, QLinearGradient, QMovie, QPainter, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import QStackedWidget, QWidget
+from PySide6.QtWidgets import QApplication, QStackedWidget, QWidget
 
 from ..core.path_guard import validate_local_media_path
 from ..core.win32_bridge import is_battery_saver_active, windows_animations_enabled
@@ -144,10 +144,26 @@ class MotionBackdropWidget(QWidget):
         self._loaded_media_key: tuple[bool, str] | None = None
         self._render_cache_key: tuple[int, int, int, int] | None = None
         self._render_cache_pixmap: QPixmap | None = None
+        self._pointer_pos: QPointF | None = None
+        self._pointer_filter_installed = False
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        if not self._is_viewer_surface:
+            self.setMouseTracking(True)
+
+    @property
+    def pointer_interactive(self) -> bool:
+        """Pointer-reactive background parallax is enabled ONLY on non-viewer surfaces (Hub Hero)."""
+        return not self._is_viewer_surface
+
+    def set_pointer_position(self, pos: QPointF | None) -> None:
+        if not self.pointer_interactive:
+            return
+        self._pointer_pos = QPointF(pos) if pos is not None else None
+        if self._surface_enabled():
+            self.update()
 
     def guard_state(self) -> MotionGuardState:
         return self._guard.evaluate(
@@ -308,11 +324,41 @@ class MotionBackdropWidget(QWidget):
             if self._timer.isActive():
                 self._timer.stop()
 
+    def _sync_pointer_filter(self, enable: bool) -> None:
+        if not self.pointer_interactive:
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        if enable and not self._pointer_filter_installed:
+            app.installEventFilter(self)
+            self._pointer_filter_installed = True
+        elif not enable and self._pointer_filter_installed:
+            app.removeEventFilter(self)
+            self._pointer_filter_installed = False
+
+    def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
+        del watched
+        if self.pointer_interactive and self.isVisible() and event.type() == QEvent.Type.MouseMove:
+            try:
+                gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
+                if gpos is not None:
+                    local = self.mapFromGlobal(gpos)
+                    if 0 <= local.x() <= self.width() and 0 <= local.y() <= self.height():
+                        self.set_pointer_position(QPointF(local))
+                    elif self._pointer_pos is not None:
+                        self.set_pointer_position(None)
+            except Exception:
+                pass
+        return False
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._sync_motion_state()
+        self._sync_pointer_filter(True)
 
     def hideEvent(self, event) -> None:
+        self._sync_pointer_filter(False)
         if self._timer.isActive():
             self._timer.stop()
         if self._movie is not None and self._movie.state() == QMovie.MovieState.Running:
@@ -320,6 +366,7 @@ class MotionBackdropWidget(QWidget):
         super().hideEvent(event)
 
     def cleanup(self) -> None:
+        self._sync_pointer_filter(False)
         self._timer.stop()
         self._clear_movie()
         self._render_cache_pixmap = None
@@ -330,6 +377,7 @@ class MotionBackdropWidget(QWidget):
         accent = QColor(palette.get("motion_cyan", palette["accent"]))
         alt = QColor(palette.get("motion_blue", palette["accent_alt"]))
         cols, rows = 6, 4
+        ptr = self._pointer_pos if self.pointer_interactive else None
         pts: list[list[QPointF]] = []
         for r in range(rows + 1):
             row_pts: list[QPointF] = []
@@ -339,6 +387,14 @@ class MotionBackdropWidget(QWidget):
                 if 0 < c < cols and 0 < r < rows:
                     bx += math.sin(self._phase * 1.1 + c * 1.3 + r) * (w * 0.032)
                     by += math.cos(self._phase * 0.9 + r * 1.5 + c) * (h * 0.045)
+                    if ptr is not None:
+                        dx = ptr.x() - bx
+                        dy = ptr.y() - by
+                        dist = math.hypot(dx, dy)
+                        if 1.0 < dist < 240.0:
+                            pull = (1.0 - dist / 240.0) * 18.0
+                            bx += (dx / dist) * pull
+                            by += (dy / dist) * pull
                 row_pts.append(QPointF(bx, by))
             pts.append(row_pts)
 
@@ -368,9 +424,12 @@ class MotionBackdropWidget(QWidget):
         accent = QColor(palette.get("motion_cyan", palette["accent"]))
         alt = QColor(palette.get("motion_blue", palette["accent_alt"]))
         crimson = QColor(palette["app_crimson"])
+        ptr = self._pointer_pos if self.pointer_interactive else None
+        ptr_shift_x = ((ptr.x() / max(1.0, w)) - 0.5) * (w * 0.22) if ptr is not None else 0.0
         painter.save()
         for idx, base_col in enumerate((accent, alt, crimson)):
             cx = w * (0.25 + 0.5 * (0.5 + 0.5 * math.sin(self._phase * (0.55 + idx * 0.2) + idx * 2.1)))
+            cx += ptr_shift_x * (0.6 + idx * 0.25)
             cy = h * (0.3 + 0.45 * (0.5 + 0.5 * math.cos(self._phase * (0.45 + idx * 0.15) + idx)))
             grad = QLinearGradient(max(0.0, cx - w * 0.4), 0.0, min(w, cx + w * 0.4), h)
             c1 = QColor(base_col)
@@ -388,17 +447,20 @@ class MotionBackdropWidget(QWidget):
         accent = QColor(palette.get("motion_cyan", palette["accent"]))
         border = QColor(palette["border_strong"])
         step = 32
+        ptr = self._pointer_pos if self.pointer_interactive else None
+        px_off = int(((ptr.x() / max(1, w)) - 0.5) * 18) if ptr is not None else 0
+        py_off = int(((ptr.y() / max(1, h)) - 0.5) * 18) if ptr is not None else 0
         offset = int((self._phase * 14.0) % step)
         painter.save()
         grid_col = QColor(border)
         grid_col.setAlpha(int(120 * opacity))
         painter.setPen(QPen(grid_col, 1))
-        for x in range(-step + offset, w + step, step):
+        for x in range(-step + ((offset + px_off) % step), w + step, step):
             painter.drawLine(x, 0, x, h)
-        for y in range(-step + offset, h + step, step):
+        for y in range(-step + ((offset + py_off) % step), h + step, step):
             painter.drawLine(0, y, w, y)
 
-        scan_y = int(((math.sin(self._phase * 0.7) * 0.5 + 0.5) * max(1, h - 1)))
+        scan_y = int(ptr.y()) if ptr is not None else int(((math.sin(self._phase * 0.7) * 0.5 + 0.5) * max(1, h - 1)))
         scan_col = QColor(accent)
         scan_alpha = 58 if palette["mode"] == "light" else 110
         scan_col.setAlpha(int(scan_alpha * opacity))

@@ -187,6 +187,40 @@ BUILTIN_PRESETS: dict[str, ThemeProfile] = {
 }
 
 
+def read_installer_language(*, reg_module: Any = None, default: str = "es") -> str:
+    """Read language selected in Windows Installer (HKCU\\Software\\TRODAI\\PDFLector\\Language)."""
+    fallback = default if default in ("es", "en", "pt") else "es"
+    if reg_module is None:
+        if os.name != "nt":
+            return fallback
+        try:
+            import winreg as reg_module  # type: ignore[no-redef]
+        except Exception:
+            return fallback
+
+    try:
+        key = reg_module.OpenKey(reg_module.HKEY_CURRENT_USER, r"Software\TRODAI\PDFLector")
+        try:
+            raw_val, _ = reg_module.QueryValueEx(key, "Language")
+        finally:
+            try:
+                reg_module.CloseKey(key)
+            except Exception:
+                pass
+        clean = str(raw_val or "").strip().lower()
+        if clean.startswith("en"):
+            return "en"
+        if clean.startswith("pt"):
+            return "pt"
+        if clean.startswith("es"):
+            return "es"
+    except OSError:
+        pass
+    except Exception:
+        pass
+    return fallback
+
+
 def default_profile() -> ThemeProfile:
     return ThemeProfile(**asdict(BUILTIN_PRESETS["trodai_corporate"]))
 

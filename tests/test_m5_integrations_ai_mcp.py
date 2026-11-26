@@ -272,7 +272,7 @@ def test_m5_integrations_ai_rag_mcp_and_ui_panel(
         assert panel.consent_checkbox.isChecked() is False
         panel.apply_theme("light")
         panel.retranslate("en")
-        assert panel.title_lbl.text() == "Ask Document"
+        assert panel.title_lbl.text() == "Ask AI"
         panel.question_edit.setText("DIAN UBL 2.1")
         panel.ask_current_question()
         qapp.processEvents()

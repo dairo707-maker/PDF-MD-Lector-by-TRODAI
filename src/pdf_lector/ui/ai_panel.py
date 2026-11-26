@@ -49,7 +49,7 @@ from .widgets import AdaptiveButton, FlowLayout, StatusTag
 
 _AI_TEXTS: dict[str, dict[str, str]] = {
     "es": {
-        "title": "Preguntar al documento",
+        "title": "Preguntar IA",
         "close": "Cerrar panel",
         "provider": "Motor",
         "consent": "Autorizar envio de fragmentos al proveedor externo (BYOK)",
@@ -86,7 +86,7 @@ _AI_TEXTS: dict[str, dict[str, str]] = {
         "no_active_doc": "Sin documento activo",
     },
     "en": {
-        "title": "Ask Document",
+        "title": "Ask AI",
         "close": "Close panel",
         "provider": "Engine",
         "consent": "Allow sending document excerpts to external BYOK provider",
@@ -123,7 +123,7 @@ _AI_TEXTS: dict[str, dict[str, str]] = {
         "no_active_doc": "No active document",
     },
     "pt": {
-        "title": "Perguntar ao documento",
+        "title": "Perguntar IA",
         "close": "Fechar painel",
         "provider": "Motor",
         "consent": "Autorizar envio de trechos ao provedor externo (BYOK)",
@@ -781,14 +781,15 @@ class AskDocumentPanel(QWidget):
                 border: 1px solid {p["border_strong"]};
             }}
             QPushButton#AskHeaderBtn {{
-                background-color: {p["bg_glass_elevated"]};
+                background-color: transparent;
                 color: {p["text_primary"]};
-                border: 1px solid {p["border_strong"]};
-                padding: 3px;
+                border: 1px solid transparent;
+                padding: 0px;
+                text-align: center;
             }}
             QPushButton#AskHeaderBtn:hover {{
                 background-color: {p["bg_hover"]};
-                border-color: {p["border_selected"]};
+                border: 1px solid transparent;
             }}
             QFrame#ByokConfigBox, QFrame#AskComposerBox, QFrame#HwGateBox {{
                 background-color: {p["bg_glass"]};

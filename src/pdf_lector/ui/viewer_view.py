@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -34,7 +35,7 @@ from ..core.path_guard import (
     validate_local_markdown_path,
     validate_local_pdf_path,
 )
-from ..core.pdf_engine import AsyncPageRenderTask, PdfDocumentSession
+from ..core.pdf_engine import AsyncPageRenderTask, PdfDocumentSession, SearchHit
 from ..core.win32_bridge import apply_trodai_window_chrome
 from ..theme.motion_engine import MotionBackdropWidget, MotionPerformanceGuard
 from ..theme.palette import UI_FONT_FAMILY, get_palette
@@ -43,6 +44,8 @@ from .dictionary_panel import DictionaryPanel
 from .md_tab_page import MarkdownTabPage
 from .notes_panel import NotesPanel
 from .pdf_canvas import CLASSIC_HIGHLIGHT_PALETTE, PdfCanvas, SharedAnnotationState
+from .presentation_view import PresentationWindow
+from .print_dialog import PrintPdfDialog
 from .svg_icons import load_svg_icon
 from .widgets import AdaptiveButton, FlowLayout, StatusTag
 
@@ -50,6 +53,10 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
     "es": {
         "viewer.save": "Guardar",
         "viewer.save_as": "Guardar como",
+        "viewer.find": "Buscar en documento (Ctrl+F)",
+        "viewer.find_placeholder": "Buscar texto en el documento (Ctrl+F)...",
+        "viewer.print": "Imprimir PDF (Ctrl+P)",
+        "viewer.present": "Modo Presentacion (F5 / Ctrl+L)",
         "viewer.empty_dual": "Abre cualquier PDF o Markdown local o suelta un archivo aqui para leerlo.",
         "viewer.tool.select": "Seleccionar",
         "viewer.tool.highlight": "Resaltar",
@@ -72,6 +79,10 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
     "en": {
         "viewer.save": "Save",
         "viewer.save_as": "Save as",
+        "viewer.find": "Find in document (Ctrl+F)",
+        "viewer.find_placeholder": "Find text in document (Ctrl+F)...",
+        "viewer.print": "Print PDF (Ctrl+P)",
+        "viewer.present": "Presentation Mode (F5 / Ctrl+L)",
         "viewer.empty_dual": "Open any local PDF or Markdown file or drop a file here to read.",
         "viewer.tool.select": "Select",
         "viewer.tool.highlight": "Highlight",
@@ -94,6 +105,10 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
     "pt": {
         "viewer.save": "Salvar",
         "viewer.save_as": "Salvar como",
+        "viewer.find": "Buscar no documento (Ctrl+F)",
+        "viewer.find_placeholder": "Buscar texto no documento (Ctrl+F)...",
+        "viewer.print": "Imprimir PDF (Ctrl+P)",
+        "viewer.present": "Modo Apresentacao (F5 / Ctrl+L)",
         "viewer.empty_dual": "Abra qualquer PDF ou Markdown local ou solte um arquivo aqui para ler.",
         "viewer.tool.select": "Selecionar",
         "viewer.tool.highlight": "Realcar",
@@ -244,15 +259,17 @@ class PdfTabPage(QWidget):
 
         self.toc_detach_btn = QPushButton("", toc_hdr_bar)
         self.toc_detach_btn.setProperty("role", "GhostAction")
-        self.toc_detach_btn.setFixedSize(22, 22)
-        self.toc_detach_btn.setStyleSheet("padding: 2px;")
+        self.toc_detach_btn.setProperty("iconOnly", "true")
+        self.toc_detach_btn.setFixedSize(24, 24)
+        self.toc_detach_btn.setIconSize(QSize(14, 14))
         self.toc_detach_btn.clicked.connect(lambda: QTimer.singleShot(0, self._toggle_toc_detach))
         th_row.addWidget(self.toc_detach_btn)
 
         self.toc_close_btn = QPushButton("", toc_hdr_bar)
         self.toc_close_btn.setProperty("role", "GhostAction")
-        self.toc_close_btn.setFixedSize(22, 22)
-        self.toc_close_btn.setStyleSheet("padding: 2px;")
+        self.toc_close_btn.setProperty("iconOnly", "true")
+        self.toc_close_btn.setFixedSize(24, 24)
+        self.toc_close_btn.setIconSize(QSize(14, 14))
         self.toc_close_btn.clicked.connect(lambda: QTimer.singleShot(0, lambda: self.set_toc_open(False)))
         th_row.addWidget(self.toc_close_btn)
         toc_layout.addWidget(toc_hdr_bar)
@@ -310,15 +327,17 @@ class PdfTabPage(QWidget):
 
         self.thumb_detach_btn = QPushButton("", thumb_hdr_bar)
         self.thumb_detach_btn.setProperty("role", "GhostAction")
-        self.thumb_detach_btn.setFixedSize(22, 22)
-        self.thumb_detach_btn.setStyleSheet("padding: 2px;")
+        self.thumb_detach_btn.setProperty("iconOnly", "true")
+        self.thumb_detach_btn.setFixedSize(24, 24)
+        self.thumb_detach_btn.setIconSize(QSize(14, 14))
         self.thumb_detach_btn.clicked.connect(lambda: QTimer.singleShot(0, self._toggle_thumbs_detach))
         tb_row.addWidget(self.thumb_detach_btn)
 
         self.thumb_close_btn = QPushButton("", thumb_hdr_bar)
         self.thumb_close_btn.setProperty("role", "GhostAction")
-        self.thumb_close_btn.setFixedSize(22, 22)
-        self.thumb_close_btn.setStyleSheet("padding: 2px;")
+        self.thumb_close_btn.setProperty("iconOnly", "true")
+        self.thumb_close_btn.setFixedSize(24, 24)
+        self.thumb_close_btn.setIconSize(QSize(14, 14))
         self.thumb_close_btn.clicked.connect(lambda: QTimer.singleShot(0, lambda: self.set_thumbs_open(False)))
         tb_row.addWidget(self.thumb_close_btn)
         thumb_layout.addWidget(thumb_hdr_bar)
@@ -1122,27 +1141,36 @@ class ViewerView(QWidget):
         self._profile = ThemeProfile()
         self._is_dict_detached = False
         self._floating_dict_win: _FloatingPaneWindow | None = None
+        self._find_hits: list[SearchHit] = []
+        self._find_idx: int = -1
+        self._presentation_win: PresentationWindow | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
 
-        # Single-Row Compact Top Bar (icon-only by default; optional text labels via Settings)
+        # Single-Row Borderless Top Bar (icon-only centered by default; zero redundant controls)
         bar_frame = QFrame(self)
-        bar_frame.setObjectName("CardPanel")
+        bar_frame.setObjectName("ViewerToolBar")
         bar_row = QHBoxLayout(bar_frame)
-        bar_row.setContentsMargins(8, 5, 8, 5)
-        bar_row.setSpacing(5)
-
-        self.open_btn = QPushButton("", bar_frame)
-        self.open_btn.setProperty("role", "PrimaryAction")
-        self.open_btn.clicked.connect(self._prompt_open_document)
-        bar_row.addWidget(self.open_btn)
+        bar_row.setContentsMargins(6, 4, 6, 4)
+        bar_row.setSpacing(6)
 
         self.save_btn = QPushButton("", bar_frame)
         self.save_btn.setProperty("role", "GhostAction")
         self.save_btn.clicked.connect(self.save_current)
-        bar_row.addWidget(self.save_btn)
+        bar_row.addWidget(self.save_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.find_btn = QPushButton("", bar_frame)
+        self.find_btn.setProperty("role", "GhostAction")
+        self.find_btn.setCheckable(True)
+        self.find_btn.clicked.connect(lambda checked: self.open_find_bar() if checked else self.close_find_bar())
+        bar_row.addWidget(self.find_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.print_btn = QPushButton("", bar_frame)
+        self.print_btn.setProperty("role", "GhostAction")
+        self.print_btn.clicked.connect(self.open_print_dialog)
+        bar_row.addWidget(self.print_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         bar_row.addWidget(self._make_v_sep(bar_frame))
 
@@ -1186,12 +1214,77 @@ class ViewerView(QWidget):
 
         bar_row.addStretch(1)
 
+        self.present_btn = QPushButton("", bar_frame)
+        self.present_btn.setProperty("role", "GhostAction")
+        self.present_btn.clicked.connect(self.open_presentation_mode)
+        bar_row.addWidget(self.present_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.fullscreen_btn = QPushButton("", bar_frame)
         self.fullscreen_btn.setProperty("role", "GhostAction")
         self.fullscreen_btn.clicked.connect(self.fullscreen_requested.emit)
-        bar_row.addWidget(self.fullscreen_btn)
+        bar_row.addWidget(self.fullscreen_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         root.addWidget(bar_frame)
+
+        # Collapsible Ctrl+F In-Document Search Bar
+        self.find_bar = QFrame(self)
+        self.find_bar.setObjectName("ViewerToolBar")
+        find_row = QHBoxLayout(self.find_bar)
+        find_row.setContentsMargins(8, 4, 8, 4)
+        find_row.setSpacing(6)
+
+        self.find_input = QLineEdit(self.find_bar)
+        self.find_input.setMinimumWidth(220)
+        self.find_input.setClearButtonEnabled(True)
+        self.find_input.textChanged.connect(lambda txt: self.run_find(txt))
+        self.find_input.returnPressed.connect(self.find_next)
+        find_row.addWidget(self.find_input, 1)
+
+        self.find_case_btn = QPushButton("Aa", self.find_bar)
+        self.find_case_btn.setProperty("role", "GhostAction")
+        self.find_case_btn.setCheckable(True)
+        self.find_case_btn.setFixedSize(34, 28)
+        self.find_case_btn.setStyleSheet("padding: 0px 4px;")
+        self.find_case_btn.setToolTip("Coincidir mayusculas y minusculas")
+        self.find_case_btn.clicked.connect(lambda: self.run_find(self.find_input.text()))
+        find_row.addWidget(self.find_case_btn)
+
+        self.find_prev_btn = QPushButton("", self.find_bar)
+        self.find_prev_btn.setProperty("role", "GhostAction")
+        self.find_prev_btn.setProperty("iconOnly", "true")
+        self.find_prev_btn.setFixedSize(28, 28)
+        self.find_prev_btn.setToolTip("Coincidencia anterior (Shift+Enter)")
+        self.find_prev_btn.clicked.connect(self.find_prev)
+        find_row.addWidget(self.find_prev_btn)
+
+        self.find_next_btn = QPushButton("", self.find_bar)
+        self.find_next_btn.setProperty("role", "GhostAction")
+        self.find_next_btn.setProperty("iconOnly", "true")
+        self.find_next_btn.setFixedSize(28, 28)
+        self.find_next_btn.setToolTip("Siguiente coincidencia (Enter)")
+        self.find_next_btn.clicked.connect(self.find_next)
+        find_row.addWidget(self.find_next_btn)
+
+        self.find_count_lbl = QLabel("0 / 0", self.find_bar)
+        self.find_count_lbl.setProperty("tone", "muted")
+        self.find_count_lbl.setMinimumWidth(52)
+        self.find_count_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        find_row.addWidget(self.find_count_lbl)
+
+        self.find_close_btn = QPushButton("", self.find_bar)
+        self.find_close_btn.setProperty("role", "GhostAction")
+        self.find_close_btn.setProperty("iconOnly", "true")
+        self.find_close_btn.setFixedSize(28, 28)
+        self.find_close_btn.setToolTip("Cerrar busqueda (Esc)")
+        self.find_close_btn.clicked.connect(self.close_find_bar)
+        find_row.addWidget(self.find_close_btn)
+
+        find_esc = QShortcut(QKeySequence("Escape"), self.find_bar)
+        find_esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        find_esc.activated.connect(self.close_find_bar)
+
+        self.find_bar.setVisible(False)
+        root.addWidget(self.find_bar)
 
         # Body: Multi-Tab Document Area + Detachable Dictionary + Adobe-style Vertical Right Rail
         self._body_row = QHBoxLayout()
@@ -1244,6 +1337,7 @@ class ViewerView(QWidget):
         rr_lay = QVBoxLayout(self.right_rail)
         rr_lay.setContentsMargins(6, 8, 6, 8)
         rr_lay.setSpacing(6)
+        rr_lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         self.thumbs_rail_btn = QPushButton("", self.right_rail)
         self.thumbs_rail_btn.setProperty("role", "ModeTab")
@@ -1292,11 +1386,6 @@ class ViewerView(QWidget):
 
         rr_lay.addStretch(1)
 
-        self.settings_rail_btn = QPushButton("", self.right_rail)
-        self.settings_rail_btn.setProperty("role", "GhostAction")
-        self.settings_rail_btn.clicked.connect(self.preferences_requested.emit)
-        rr_lay.addWidget(self.settings_rail_btn)
-
         self._body_row.addWidget(self.right_rail)
         root.addLayout(self._body_row, 1)
 
@@ -1304,6 +1393,27 @@ class ViewerView(QWidget):
         save_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         save_sc.activated.connect(self.save_current)
         self._save_shortcut = save_sc
+
+        for seq, cb in (
+            ("Ctrl+F", self.open_find_bar),
+            ("Ctrl+P", self.open_print_dialog),
+            ("F5", self.open_presentation_mode),
+            ("Ctrl+L", self.open_presentation_mode),
+            ("Ctrl+W", self.close_current_tab),
+            ("Ctrl++", lambda: self._step_zoom(0.15)),
+            ("Ctrl+=", lambda: self._step_zoom(0.15)),
+            ("Ctrl+-", lambda: self._step_zoom(-0.15)),
+            ("Ctrl+0", self._fit_width),
+            ("Ctrl+R", self._rotate_page),
+            ("Ctrl+Z", self._undo_current),
+            ("PgDown", lambda: self._step_page(1)),
+            ("PgUp", lambda: self._step_page(-1)),
+            ("Home", self._jump_first_page),
+            ("End", self._jump_last_page),
+        ):
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(cb)
 
         self.set_show_button_labels(False)
         self.retranslate("es")
@@ -1325,14 +1435,16 @@ class ViewerView(QWidget):
 
     def _all_toolbar_buttons(self) -> list[tuple[QPushButton, str]]:
         return [
-            (self.open_btn, t("viewer.open", self._lang)),
             (self.save_btn, _tv("viewer.save", self._lang)),
+            (self.find_btn, _tv("viewer.find", self._lang)),
+            (self.print_btn, _tv("viewer.print", self._lang)),
             (self.zoom_out_btn, t("viewer.zoom_out", self._lang)),
             (self.zoom_in_btn, t("viewer.zoom_in", self._lang)),
             (self.fit_btn, t("viewer.fit_width", self._lang)),
             (self.prev_btn, t("viewer.prev", self._lang)),
             (self.next_btn, t("viewer.next", self._lang)),
             (self.rotate_btn, t("viewer.rotate", self._lang)),
+            (self.present_btn, _tv("viewer.present", self._lang)),
             (
                 self.fullscreen_btn,
                 t("viewer.exit_fullscreen" if self._is_fullscreen else "viewer.fullscreen", self._lang),
@@ -1344,7 +1456,6 @@ class ViewerView(QWidget):
             (self.dict_btn, t("viewer.dictionary", self._lang)),
             (self.ai_rail_btn, _tv("viewer.rail.ai", self._lang)),
             (self.backdrop_btn, t("viewer.backdrop_toggle", self._lang)),
-            (self.settings_rail_btn, _tv("viewer.rail.settings", self._lang)),
         ]
 
     def set_show_button_labels(self, show_labels: bool) -> None:
@@ -1352,17 +1463,20 @@ class ViewerView(QWidget):
         self.right_rail.setFixedWidth(148 if self._show_button_labels else 44)
         for btn, label in self._all_toolbar_buttons():
             btn.setToolTip(label)
+            btn.setIconSize(QSize(16, 16))
             if self._show_button_labels:
                 btn.setProperty("iconOnly", "false")
                 btn.setMinimumSize(0, 30)
                 btn.setMaximumSize(16777215, 32)
                 btn.setText(label)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
             else:
                 btn.setProperty("iconOnly", "true")
-                btn.setFixedSize(30, 30)
                 btn.setText("")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.setFixedSize(32, 32)
 
     def show_button_labels(self) -> bool:
         return self._show_button_labels
@@ -1790,12 +1904,170 @@ class ViewerView(QWidget):
         self.fullscreen_btn.setText(label if self._show_button_labels else "")
         self.fullscreen_btn.setIcon(load_svg_icon(icon, color=p["icon_color"], size=15))
 
+    def _jump_first_page(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.set_page(0)
+
+    def _jump_last_page(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage) and tab.session.page_count > 0:
+            tab.set_page(tab.session.page_count - 1)
+
+    def _undo_current(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab._undo_last_annotation()
+
+    def close_current_tab(self) -> None:
+        idx = self.tabs.currentIndex()
+        if idx >= 0:
+            self._close_tab(idx)
+
+    # --- Ctrl+F In-Document Search ---
+
+    def open_find_bar(self) -> None:
+        tab = self._current_tab()
+        if tab is None:
+            return
+        self.find_bar.setVisible(True)
+        self.find_btn.setChecked(True)
+        self.find_input.setFocus()
+        self.find_input.selectAll()
+
+    def close_find_bar(self) -> None:
+        self.find_bar.setVisible(False)
+        self.find_btn.setChecked(False)
+        self._clear_search_highlights()
+
+    def _clear_search_highlights(self) -> None:
+        self._find_hits = []
+        self._find_idx = -1
+        self.find_count_lbl.setText("0 / 0")
+        for idx in range(self.tabs.count()):
+            w = self.tabs.widget(idx)
+            if isinstance(w, PdfTabPage):
+                for canvas in w._page_canvases:
+                    canvas.set_search_highlights([], active_index=-1)
+
+    def _apply_search_hit(self, hit_index: int) -> None:
+        tab = self._current_tab()
+        if not isinstance(tab, PdfTabPage) or not self._find_hits:
+            return
+        self._find_idx = hit_index % len(self._find_hits)
+        active = self._find_hits[self._find_idx]
+        self.find_count_lbl.setText(f"{self._find_idx + 1} / {len(self._find_hits)}")
+
+        for pidx, canvas in enumerate(tab._page_canvases):
+            page_hits = [h for h in self._find_hits if h.page_index == pidx]
+            if not page_hits:
+                canvas.set_search_highlights([], active_index=-1)
+                continue
+            active_local = -1
+            rects = []
+            for local_i, h in enumerate(page_hits):
+                rects.append(h.rect_pdf)
+                if h is active:
+                    active_local = local_i
+            canvas.set_search_highlights(rects, active_index=active_local)
+
+        if 0 <= active.page_index < tab.session.page_count:
+            tab.set_page(active.page_index)
+            if active.page_index < len(tab._page_canvases):
+                c = tab._page_canvases[active.page_index]
+                sr = c._pdf_to_screen_rect(active.rect_pdf)
+                tab.scroll.ensureVisible(
+                    max(0, c.x() + int(sr.center().x())),
+                    max(0, c.y() + int(sr.center().y())),
+                    40,
+                    90,
+                )
+
+    def run_find(self, query: str | None = None) -> list[SearchHit]:
+        needle = (self.find_input.text() if query is None else str(query)).strip()
+        tab = self._current_tab()
+        self._clear_search_highlights()
+        if not needle or tab is None:
+            return []
+
+        if isinstance(tab, PdfTabPage):
+            hits = tab.session.search_text(
+                needle,
+                case_sensitive=self.find_case_btn.isChecked(),
+                max_hits=250,
+            )
+            self._find_hits = hits
+            if hits:
+                self._apply_search_hit(0)
+            return hits
+
+        if isinstance(tab, MarkdownTabPage):
+            found = tab.preview_browser.find(needle) or tab.editor_widget.find(needle)
+            self.find_count_lbl.setText("1 / 1" if found else "0 / 0")
+            return []
+        return []
+
+    def find_next(self) -> None:
+        tab = self._current_tab()
+        needle = self.find_input.text().strip()
+        if isinstance(tab, MarkdownTabPage) and needle:
+            found = tab.preview_browser.find(needle) or tab.editor_widget.find(needle)
+            if not found:
+                cursor = tab.preview_browser.textCursor()
+                cursor.movePosition(cursor.MoveOperation.Start)
+                tab.preview_browser.setTextCursor(cursor)
+                found = tab.preview_browser.find(needle)
+            self.find_count_lbl.setText("OK" if found else "0 / 0")
+            return
+        if not self._find_hits:
+            self.run_find()
+            return
+        self._apply_search_hit(self._find_idx + 1)
+
+    def find_prev(self) -> None:
+        if not self._find_hits:
+            self.run_find()
+            return
+        self._apply_search_hit(self._find_idx - 1)
+
+    # --- Ctrl+P System Print & F5/Ctrl+L Presentation Mode ---
+
+    def open_print_dialog(self) -> None:
+        tab = self._current_tab()
+        if not isinstance(tab, PdfTabPage):
+            return
+        dlg = PrintPdfDialog(
+            tab.session,
+            current_page=tab.current_page,
+            doc_name=tab.pdf_path.name,
+            mode=self._mode,
+            parent=self,
+        )
+        dlg.exec()
+
+    def open_presentation_mode(self) -> None:
+        tab = self._current_tab()
+        if not isinstance(tab, PdfTabPage):
+            return
+        if self._presentation_win is None or not shiboken6.isValid(self._presentation_win):
+            self._presentation_win = PresentationWindow(self)
+            self._presentation_win.closed_at_page.connect(self._on_presentation_closed)
+        self._presentation_win.start_presentation(tab.session, start_page=tab.current_page)
+
+    def _on_presentation_closed(self, page_index: int) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage) and 0 <= page_index < tab.session.page_count:
+            tab.set_page(page_index)
+
     def _sync_toolbar_state(self) -> None:
         tab = self._current_tab()
         if tab is None:
             self.zoom_tag.setText("—")
             self.page_tag.setText("0 / 0")
             self.save_btn.setEnabled(False)
+            self.find_btn.setEnabled(False)
+            self.print_btn.setEnabled(False)
+            self.present_btn.setEnabled(False)
             for b in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.prev_btn, self.next_btn, self.rotate_btn):
                 b.setEnabled(False)
             return
@@ -1803,12 +2075,18 @@ class ViewerView(QWidget):
             self.zoom_tag.setText(f"{int(round(tab.zoom * 100))}%")
             self.page_tag.setText(f"{tab.current_page + 1} / {tab.session.page_count}")
             self.save_btn.setEnabled(True)
+            self.find_btn.setEnabled(True)
+            self.print_btn.setEnabled(True)
+            self.present_btn.setEnabled(True)
             for b in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.prev_btn, self.next_btn, self.rotate_btn):
                 b.setEnabled(True)
         else:
             self.zoom_tag.setText("100%")
             self.page_tag.setText("MD")
             self.save_btn.setEnabled(True)
+            self.find_btn.setEnabled(True)
+            self.print_btn.setEnabled(False)
+            self.present_btn.setEnabled(False)
             for b in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.prev_btn, self.next_btn, self.rotate_btn):
                 b.setEnabled(False)
 
@@ -1817,6 +2095,7 @@ class ViewerView(QWidget):
         self.set_show_button_labels(self._show_button_labels)
         self.set_fullscreen_state(self._is_fullscreen)
         self.empty_lbl.setText(_tv("viewer.empty_dual", lang))
+        self.find_input.setPlaceholderText(_tv("viewer.find_placeholder", lang))
         self.dict_panel.retranslate(lang)
         self.notes_panel.retranslate(lang)
         if self._floating_dict_win is not None and shiboken6.isValid(self._floating_dict_win):
@@ -1837,23 +2116,27 @@ class ViewerView(QWidget):
 
         if self._mode != self._applied_theme_mode:
             self._applied_theme_mode = self._mode
-            self.open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
-            self.save_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=15))
-            self.zoom_out_btn.setIcon(load_svg_icon("zoom_out", color=p["icon_color"], size=15))
-            self.zoom_in_btn.setIcon(load_svg_icon("zoom_in", color=p["icon_color"], size=15))
-            self.fit_btn.setIcon(load_svg_icon("fit_width", color=p["icon_color"], size=15))
-            self.prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=15))
-            self.next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=15))
-            self.rotate_btn.setIcon(load_svg_icon("rotate", color=p["icon_color"], size=15))
+            self.save_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=16))
+            self.find_btn.setIcon(load_svg_icon("search", color=p["icon_color"], size=16))
+            self.print_btn.setIcon(load_svg_icon("printer", color=p["icon_color"], size=16))
+            self.zoom_out_btn.setIcon(load_svg_icon("zoom_out", color=p["icon_color"], size=16))
+            self.zoom_in_btn.setIcon(load_svg_icon("zoom_in", color=p["icon_color"], size=16))
+            self.fit_btn.setIcon(load_svg_icon("fit_width", color=p["icon_color"], size=16))
+            self.prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=16))
+            self.next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=16))
+            self.rotate_btn.setIcon(load_svg_icon("rotate", color=p["icon_color"], size=16))
+            self.present_btn.setIcon(load_svg_icon("presentation", color=p["icon_color"], size=16))
+            self.find_prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=14))
+            self.find_next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=14))
+            self.find_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=13))
 
-            self.thumbs_rail_btn.setIcon(load_svg_icon("thumbs", color=p["icon_color"], size=15))
-            self.toc_rail_btn.setIcon(load_svg_icon("toc", color=p["icon_color"], size=15))
-            self.ink_rail_btn.setIcon(load_svg_icon("ink", color=p["icon_color"], size=15))
-            self.notes_rail_btn.setIcon(load_svg_icon("comment", color=p["icon_color"], size=15))
-            self.dict_btn.setIcon(load_svg_icon("book", color=p["icon_color"], size=15))
-            self.ai_rail_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=15))
-            self.backdrop_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
-            self.settings_rail_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=15))
+            self.thumbs_rail_btn.setIcon(load_svg_icon("thumbs", color=p["icon_color"], size=16))
+            self.toc_rail_btn.setIcon(load_svg_icon("toc", color=p["icon_color"], size=16))
+            self.ink_rail_btn.setIcon(load_svg_icon("ink", color=p["icon_color"], size=16))
+            self.notes_rail_btn.setIcon(load_svg_icon("comment", color=p["icon_color"], size=16))
+            self.dict_btn.setIcon(load_svg_icon("book", color=p["icon_color"], size=16))
+            self.ai_rail_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=16))
+            self.backdrop_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=16))
             self.set_fullscreen_state(self._is_fullscreen)
 
             self.zoom_tag.apply_theme(self._mode)
@@ -1869,6 +2152,9 @@ class ViewerView(QWidget):
                 tab.apply_profile(profile)
 
     def cleanup(self) -> None:
+        if self._presentation_win is not None and shiboken6.isValid(self._presentation_win):
+            self._presentation_win.hide()
+            self._presentation_win.close()
         if self._floating_dict_win is not None and shiboken6.isValid(self._floating_dict_win):
             self._floating_dict_win.hide()
             self._floating_dict_win.close()

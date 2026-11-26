@@ -205,53 +205,67 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
     }}
 
     QPushButton {{
-        background-color: {p["bg_glass_elevated"]};
+        background-color: transparent;
         color: {p["text_primary"]};
-        border: 1px solid {p["border_strong"]};
-        padding: 7px 14px;
+        border: 1px solid transparent;
+        padding: 6px 12px;
         font-size: 12px;
         font-weight: 500;
     }}
 
     QPushButton:hover {{
         background-color: {p["bg_hover"]};
-        border-color: {p["border_selected"]};
+        border: 1px solid transparent;
+    }}
+
+    QPushButton:pressed {{
+        background-color: {p["bg_selected_hex"]};
+    }}
+
+    QPushButton[iconOnly="true"] {{
+        padding: 0px;
+        text-align: center;
     }}
 
     QPushButton[role="PrimaryAction"] {{
         background-color: {p["primary_bg"]};
         color: {p["primary_fg"]};
-        border: 1px solid {p["primary_bg"]};
+        border: none;
         font-weight: 700;
     }}
 
     QPushButton[role="PrimaryAction"]:hover {{
         background-color: {p["primary_hover"]};
-        border-color: {p["border_selected"]};
+        border: none;
     }}
 
     QPushButton[role="GhostAction"] {{
-        background-color: {p["bg_glass"]};
+        background-color: transparent;
         color: {p["text_primary"]};
-        border: 1px solid {p["border_strong"]};
+        border: 1px solid transparent;
     }}
 
     QPushButton[role="GhostAction"]:hover {{
         background-color: {p["bg_hover"]};
-        border-color: {p["border_selected"]};
+        border: 1px solid transparent;
     }}
 
     QPushButton[role="ModeTab"] {{
-        background-color: {p["bg_glass"]};
+        background-color: transparent;
         color: {p["text_secondary"]};
-        border: 1px solid {p["border_hairline"]};
-        padding: 7px 12px;
+        border: 1px solid transparent;
+        padding: 6px 12px;
+    }}
+
+    QPushButton[role="ModeTab"]:hover {{
+        background-color: {p["bg_hover"]};
+        color: {p["text_primary"]};
     }}
 
     QPushButton[role="ModeTab"]:checked {{
         color: {p["text_primary"]};
         background-color: {p["bg_selected_hex"]};
-        border: 1px solid {p["border_strong"]};
+        border: 1px solid transparent;
         font-weight: 700;
     }}
 
@@ -274,20 +288,32 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
     }}
 
     QPushButton#TopUtilityBtn {{
-        background-color: {p["bg_glass"]};
+        background-color: transparent;
         color: {p["text_primary"]};
-        border: 1px solid {p["border_hairline"]};
-        padding: 5px 10px;
+        border: 1px solid transparent;
+        padding: 0px;
+        text-align: center;
     }}
 
     QPushButton#TopUtilityBtn:hover {{
         background-color: {p["bg_hover"]};
-        border-color: {p["border_strong"]};
+        border: 1px solid transparent;
     }}
 
     QPushButton#TopUtilityBtn:checked {{
         background-color: {p["bg_selected_hex"]};
-        border-color: {p["border_selected"]};
+        border: 1px solid transparent;
+    }}
+
+    QPushButton#TopUtilityBtn::menu-indicator {{
+        image: none;
+        width: 0px;
+    }}
+
+    QFrame#ViewerToolBar {{
+        background-color: transparent;
+        border: none;
+        border-bottom: 1px solid {p["border_hairline"]};
     }}
 
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
@@ -479,12 +505,6 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
         background-color: {p["bg_menu"]};
         color: {p["text_primary"]};
         border: 1px solid {p["border_strong"]};
-    }}
-
-    QPushButton[iconOnly="true"] {{
-        padding: 5px;
-        min-width: 28px;
-        min-height: 28px;
     }}
 
     QTextBrowser {{

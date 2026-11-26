@@ -210,6 +210,8 @@ class PdfCanvas(QWidget):
         self._selected_text: str = ""
         self._selected_word: str = ""
         self._popover: QFrame | None = None
+        self._search_rects_pdf: list[tuple[float, float, float, float]] = []
+        self._active_search_idx: int = -1
 
         self._dragging_note_id: str | None = None
         self._dragging_note_start_px: QPointF | None = None
@@ -263,6 +265,16 @@ class PdfCanvas(QWidget):
 
     def hide_popover(self) -> None:
         self._hide_popover()
+
+    def set_search_highlights(
+        self,
+        rects_pdf: list[tuple[float, float, float, float]],
+        *,
+        active_index: int = -1,
+    ) -> None:
+        self._search_rects_pdf = list(rects_pdf or [])
+        self._active_search_idx = int(active_index)
+        self.update()
 
     def set_session(self, session: PdfDocumentSession | None, page_index: int = 0) -> None:
         self._session = session
@@ -1397,6 +1409,18 @@ class PdfCanvas(QWidget):
         painter.fillRect(self.rect(), QColor("#FFFFFF"))
         if self._rendered_pixmap is not None and not self._rendered_pixmap.isNull():
             painter.drawPixmap(0, 0, self._rendered_pixmap)
+
+        # In-PDF search matches (Ctrl+F)
+        if self._search_rects_pdf:
+            for idx, rect_pdf in enumerate(self._search_rects_pdf):
+                sr = self._pdf_to_screen_rect(rect_pdf)
+                if idx == self._active_search_idx:
+                    painter.setPen(QPen(QColor("#D97706"), 2))
+                    painter.setBrush(QColor(245, 158, 11, 130))
+                else:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(253, 224, 71, 90))
+                painter.drawRect(sr)
 
         # Selection quads
         if self._selection_quads_pdf:

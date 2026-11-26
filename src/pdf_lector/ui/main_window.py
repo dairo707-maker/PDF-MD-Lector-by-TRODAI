@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QSize, QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -217,8 +217,9 @@ class MainWindow(QMainWindow):
 
         self.sidebar_collapse_btn = QPushButton("", self._sidebar_expanded)
         self.sidebar_collapse_btn.setProperty("role", "GhostAction")
-        self.sidebar_collapse_btn.setFixedSize(26, 26)
-        self.sidebar_collapse_btn.setStyleSheet("padding: 2px;")
+        self.sidebar_collapse_btn.setProperty("iconOnly", "true")
+        self.sidebar_collapse_btn.setFixedSize(30, 30)
+        self.sidebar_collapse_btn.setIconSize(QSize(15, 15))
         self.sidebar_collapse_btn.setToolTip("Contraer panel lateral")
         self.sidebar_collapse_btn.clicked.connect(lambda: self.set_sidebar_collapsed(True))
         app_head.addWidget(self.sidebar_collapse_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -268,43 +269,48 @@ class MainWindow(QMainWindow):
         sb_layout.addLayout(seal_row)
         sidebar_root_lay.addWidget(self._sidebar_expanded)
 
-        # Collapsed Ribbon Host (40px Adobe-style slim vertical tab)
+        # Collapsed Ribbon Host (42px Adobe-style slim vertical tab)
         self._sidebar_ribbon = QWidget(self.sidebar)
         self._sidebar_ribbon.setObjectName("SidebarRibbon")
         self._sidebar_ribbon.setVisible(False)
         rib_lay = QVBoxLayout(self._sidebar_ribbon)
         rib_lay.setContentsMargins(5, 10, 5, 10)
         rib_lay.setSpacing(8)
+        rib_lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         self.rib_expand_btn = QPushButton("", self._sidebar_ribbon)
         self.rib_expand_btn.setProperty("role", "GhostAction")
-        self.rib_expand_btn.setFixedSize(30, 30)
-        self.rib_expand_btn.setStyleSheet("padding: 3px;")
+        self.rib_expand_btn.setProperty("iconOnly", "true")
+        self.rib_expand_btn.setFixedSize(32, 32)
+        self.rib_expand_btn.setIconSize(QSize(16, 16))
         self.rib_expand_btn.setToolTip("Desplegar menu lateral")
         self.rib_expand_btn.clicked.connect(lambda: self.set_sidebar_collapsed(False))
-        rib_lay.addWidget(self.rib_expand_btn)
+        rib_lay.addWidget(self.rib_expand_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.rib_open_btn = QPushButton("", self._sidebar_ribbon)
         self.rib_open_btn.setProperty("role", "PrimaryAction")
-        self.rib_open_btn.setFixedSize(30, 30)
-        self.rib_open_btn.setStyleSheet("padding: 3px;")
+        self.rib_open_btn.setProperty("iconOnly", "true")
+        self.rib_open_btn.setFixedSize(32, 32)
+        self.rib_open_btn.setIconSize(QSize(16, 16))
         self.rib_open_btn.clicked.connect(self._open_document_dialog)
-        rib_lay.addWidget(self.rib_open_btn)
+        rib_lay.addWidget(self.rib_open_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         rib_sep = QFrame(self._sidebar_ribbon)
         rib_sep.setFixedHeight(1)
+        rib_sep.setFixedWidth(24)
         rib_sep.setStyleSheet("background-color: #334155;")
-        rib_lay.addWidget(rib_sep)
+        rib_lay.addWidget(rib_sep, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.rib_nav_btns: list[QPushButton] = []
         for idx, _icon in enumerate(("home", "viewer", "palette")):
             rb = QPushButton("", self._sidebar_ribbon)
             rb.setProperty("role", "ModeTab")
+            rb.setProperty("iconOnly", "true")
             rb.setCheckable(True)
-            rb.setFixedSize(30, 30)
-            rb.setStyleSheet("padding: 3px;")
+            rb.setFixedSize(32, 32)
+            rb.setIconSize(QSize(16, 16))
             rb.clicked.connect(lambda _=False, i=idx: self.switch_view(i))
-            rib_lay.addWidget(rb)
+            rib_lay.addWidget(rb, 0, Qt.AlignmentFlag.AlignHCenter)
             self.rib_nav_btns.append(rb)
 
         rib_lay.addStretch(1)
@@ -324,72 +330,51 @@ class MainWindow(QMainWindow):
         self.topbar.setObjectName("TopBar")
         self.topbar.setFixedHeight(48)
         tb_layout = QHBoxLayout(self.topbar)
-        tb_layout.setContentsMargins(14, 8, 14, 8)
+        tb_layout.setContentsMargins(14, 0, 14, 0)
         tb_layout.setSpacing(6)
 
         self.top_search = QLineEdit(self.topbar)
-        self.top_search.setMinimumWidth(140)
+        self.top_search.setMinimumWidth(160)
         self.top_search.setMaximumWidth(280)
         self.top_search.textChanged.connect(self._on_top_search)
-        tb_layout.addWidget(self.top_search, 1)
+        tb_layout.addWidget(self.top_search, 1, Qt.AlignmentFlag.AlignVCenter)
 
         tb_layout.addStretch(1)
 
-        self.top_studio_btn = QPushButton("", self.topbar)
-        self.top_studio_btn.setObjectName("TopUtilityBtn")
-        self.top_studio_btn.clicked.connect(lambda: self.switch_view(2))
-        tb_layout.addWidget(self.top_studio_btn)
-
-        self.top_ai_btn = QPushButton("", self.topbar)
-        self.top_ai_btn.setObjectName("TopUtilityBtn")
-        self.top_ai_btn.setFixedSize(34, 30)
-        self.top_ai_btn.setCheckable(True)
-        self.top_ai_btn.setToolTip("Preguntar al documento (IA)")
-        self.top_ai_btn.clicked.connect(self.toggle_ai_panel)
-        tb_layout.addWidget(self.top_ai_btn)
-
         self.top_notif_btn = QPushButton("", self.topbar)
         self.top_notif_btn.setObjectName("TopUtilityBtn")
-        self.top_notif_btn.setFixedSize(34, 30)
+        self.top_notif_btn.setProperty("iconOnly", "true")
+        self.top_notif_btn.setFixedSize(32, 32)
+        self.top_notif_btn.setIconSize(QSize(16, 16))
         self.top_notif_btn.setToolTip("Notificaciones y Tareas")
         self.top_notif_btn.clicked.connect(self.open_notifications_dialog)
-        tb_layout.addWidget(self.top_notif_btn)
+        tb_layout.addWidget(self.top_notif_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.top_settings_btn = QPushButton("", self.topbar)
         self.top_settings_btn.setObjectName("TopUtilityBtn")
-        self.top_settings_btn.setFixedSize(34, 30)
+        self.top_settings_btn.setProperty("iconOnly", "true")
+        self.top_settings_btn.setFixedSize(32, 32)
+        self.top_settings_btn.setIconSize(QSize(16, 16))
         self.top_settings_btn.setToolTip("Configuracion y Preferencias")
         self.top_settings_btn.clicked.connect(self.open_preferences_dialog)
-        tb_layout.addWidget(self.top_settings_btn)
+        tb_layout.addWidget(self.top_settings_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.top_menu_btn = QPushButton("", self.topbar)
         self.top_menu_btn.setObjectName("TopUtilityBtn")
-        self.top_menu_btn.setFixedSize(34, 30)
+        self.top_menu_btn.setProperty("iconOnly", "true")
+        self.top_menu_btn.setFixedSize(32, 32)
+        self.top_menu_btn.setIconSize(QSize(16, 16))
         self.top_menu_btn.setToolTip("Mas herramientas, Soporte y Acerca de")
         self._build_utility_menu()
-        tb_layout.addWidget(self.top_menu_btn)
-
-        self.top_fullscreen_btn = QPushButton("", self.topbar)
-        self.top_fullscreen_btn.setObjectName("TopUtilityBtn")
-        self.top_fullscreen_btn.setFixedSize(34, 30)
-        self.top_fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-        tb_layout.addWidget(self.top_fullscreen_btn)
+        tb_layout.addWidget(self.top_menu_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.top_theme_btn = QPushButton("", self.topbar)
         self.top_theme_btn.setObjectName("TopUtilityBtn")
-        self.top_theme_btn.setFixedSize(34, 30)
+        self.top_theme_btn.setProperty("iconOnly", "true")
+        self.top_theme_btn.setFixedSize(32, 32)
+        self.top_theme_btn.setIconSize(QSize(16, 16))
         self.top_theme_btn.clicked.connect(self._toggle_dark_light)
-        tb_layout.addWidget(self.top_theme_btn)
-
-        self.lang_combo = QComboBox(self.topbar)
-        self.lang_combo.setFixedSize(64, 30)
-        self.lang_combo.addItem("ES", "es")
-        self.lang_combo.addItem("EN", "en")
-        self.lang_combo.addItem("PT", "pt")
-        lang_idx = max(0, self.lang_combo.findData(self._profile.language))
-        self.lang_combo.setCurrentIndex(lang_idx)
-        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        tb_layout.addWidget(self.lang_combo)
+        tb_layout.addWidget(self.top_theme_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         main_col.addWidget(self.topbar)
 
@@ -490,15 +475,20 @@ class MainWindow(QMainWindow):
         self.viewer_view.document_inspected.connect(self._on_document_inspected)
         self.viewer_view.dictionary_lookup_recorded.connect(self._insights.record_dictionary_lookup)
         self.viewer_view.ai_panel_requested.connect(self.toggle_ai_panel)
-        self.viewer_view.preferences_requested.connect(self.open_preferences_dialog)
         self.viewer_view.active_document_changed.connect(self._on_active_document_changed)
         self.viewer_view.document_opened.connect(self._on_viewer_document_opened)
         self.viewer_view.document_edited.connect(self._schedule_debounced_autosave)
         self.viewer_view.tabs.currentChanged.connect(lambda _idx: self._schedule_debounced_autosave())
 
-        # Keyboard shortcuts: Ctrl+K search, F11 fullscreen, Esc exit fullscreen
+        # Keyboard shortcuts: Ctrl+O open, Ctrl+K search, F1 shortcuts, F11 fullscreen, Esc exit fullscreen
+        self._open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
+        self._open_shortcut.activated.connect(self._open_document_dialog)
+
         self._search_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
         self._search_shortcut.activated.connect(self._focus_search)
+
+        self._shortcuts_shortcut = QShortcut(QKeySequence("F1"), self)
+        self._shortcuts_shortcut.activated.connect(self.open_shortcuts_dialog)
 
         self._f11_shortcut = QShortcut(QKeySequence("F11"), self)
         self._f11_shortcut.activated.connect(self.toggle_fullscreen)
@@ -529,6 +519,10 @@ class MainWindow(QMainWindow):
         act_sup.triggered.connect(self.open_support_dialog)
         menu.addAction(act_sup)
 
+        act_shortcuts = QAction("Atajos de teclado y presentacion (F1)", menu)
+        act_shortcuts.triggered.connect(self.open_shortcuts_dialog)
+        menu.addAction(act_shortcuts)
+
         act_tour = QAction("Recorrido guiado", menu)
         act_tour.triggered.connect(self.open_tour_dialog)
         menu.addAction(act_tour)
@@ -540,6 +534,12 @@ class MainWindow(QMainWindow):
 
         self.top_menu_btn.setMenu(menu)
         self._utility_menu = menu
+
+    def open_shortcuts_dialog(self) -> None:
+        from .shortcuts_dialog import ShortcutsDialog
+
+        dlg = ShortcutsDialog(mode=self._profile.base_mode, parent=self)
+        dlg.exec()
 
     def _apply_screen_safe_initial_geometry(self) -> None:
         screen = QApplication.primaryScreen()
@@ -559,7 +559,7 @@ class MainWindow(QMainWindow):
         self._sidebar_collapsed = want
         self._sidebar_expanded.setVisible(not want)
         self._sidebar_ribbon.setVisible(want)
-        self.sidebar.setFixedWidth(40 if want else 226)
+        self.sidebar.setFixedWidth(44 if want else 226)
 
     def is_sidebar_collapsed(self) -> bool:
         return self._sidebar_collapsed
@@ -568,15 +568,6 @@ class MainWindow(QMainWindow):
         self._prefs = prefs
         self.viewer_view.set_show_button_labels(prefs.show_button_labels)
         self.viewer_view.set_continuous_scroll(prefs.continuous_scroll)
-        label = t("topbar.theme_studio", self._profile.language)
-        self.top_studio_btn.setToolTip(label)
-        if prefs.show_button_labels:
-            self.top_studio_btn.setText(label)
-            self.top_studio_btn.setMinimumSize(0, 30)
-            self.top_studio_btn.setMaximumSize(16777215, 30)
-        else:
-            self.top_studio_btn.setText("")
-            self.top_studio_btn.setFixedSize(34, 30)
 
     def ensure_sample_pdf_loaded(self) -> Path:
         base = self._sample_pdf_dir or (Path(tempfile.gettempdir()) / "TRODAI_PDFLector")
@@ -772,7 +763,6 @@ class MainWindow(QMainWindow):
     def _close_ai_panel(self) -> None:
         if self._ai_panel is not None and shiboken6.isValid(self._ai_panel):
             self._ai_panel.setVisible(False)
-        self.top_ai_btn.setChecked(False)
         self.viewer_view.set_ai_panel_checked(False)
 
     def toggle_ai_panel(self) -> None:
@@ -793,11 +783,10 @@ class MainWindow(QMainWindow):
                 self._root_h_layout.addWidget(panel)
                 self._ai_panel = panel
             except ImportError:
-                self.top_ai_btn.setChecked(False)
                 self.viewer_view.set_ai_panel_checked(False)
                 QMessageBox.information(
                     self,
-                    "Preguntar al documento",
+                    "Preguntar IA",
                     "El panel de consulta IA se activara cuando el modulo ai_panel este instalado.",
                 )
                 return
@@ -807,7 +796,6 @@ class MainWindow(QMainWindow):
             self._ai_panel.retranslate(self._profile.language)
             self._ai_panel.refresh_active_document()
         self._ai_panel.setVisible(want)
-        self.top_ai_btn.setChecked(want)
         self.viewer_view.set_ai_panel_checked(want)
 
     def open_tool_workspace(self, tool_id: str) -> None:
@@ -1005,12 +993,6 @@ class MainWindow(QMainWindow):
             self.showNormal()
 
         self.viewer_view.set_fullscreen_state(self._is_fullscreen)
-        self._sync_fullscreen_icon()
-
-    def _sync_fullscreen_icon(self) -> None:
-        p = get_palette(self._profile.base_mode)
-        icon = "exit_fullscreen" if self._is_fullscreen else "fullscreen"
-        self.top_fullscreen_btn.setIcon(load_svg_icon(icon, color=p["icon_color"], size=15))
 
     def _on_document_inspected(self, sample_text: str, page_count: int, toc_count: int) -> None:
         self._insights.record_document_opened(sample_text, page_count=page_count, toc_count=toc_count)
@@ -1045,12 +1027,6 @@ class MainWindow(QMainWindow):
         updated = replace(self._profile, apply_to_viewer_backdrop=bool(enabled))
         self.apply_profile(updated)
 
-    def _on_language_changed(self, idx: int) -> None:
-        lang = str(self.lang_combo.itemData(idx) or "es")
-        updated = replace(self._profile, language=lang)
-        self.retranslate(lang)
-        self.apply_profile(updated)
-
     def retranslate(self, lang: str) -> None:
         self.open_sidebar_btn.setText(t("nav.open_pdf", lang))
         self.rib_open_btn.setToolTip(t("nav.open_pdf", lang))
@@ -1060,11 +1036,6 @@ class MainWindow(QMainWindow):
             rb.setToolTip(lbl)
 
         self.top_search.setPlaceholderText(t("topbar.search_placeholder", lang))
-        studio_lbl = t("topbar.theme_studio", lang)
-        self.top_studio_btn.setToolTip(studio_lbl)
-        if self._prefs.show_button_labels:
-            self.top_studio_btn.setText(studio_lbl)
-        self.top_fullscreen_btn.setToolTip(t("topbar.fullscreen", lang))
         self.privacy_tag.setText(t("sidebar.privacy_tag", lang))
 
         self.hub_view.retranslate(lang)
@@ -1110,12 +1081,9 @@ class MainWindow(QMainWindow):
             for rb, icon_name in zip(self.rib_nav_btns, ("home", "viewer", "palette")):
                 rb.setIcon(load_svg_icon(icon_name, color=p["icon_color"], size=15))
 
-            self.top_studio_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
-            self.top_ai_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=15))
-            self.top_notif_btn.setIcon(load_svg_icon("bell", color=p["icon_color"], size=15))
-            self.top_settings_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=15))
-            self.top_menu_btn.setIcon(load_svg_icon("info", color=p["icon_color"], size=15))
-            self._sync_fullscreen_icon()
+            self.top_notif_btn.setIcon(load_svg_icon("bell", color=p["icon_color"], size=16))
+            self.top_settings_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=16))
+            self.top_menu_btn.setIcon(load_svg_icon("info", color=p["icon_color"], size=16))
 
             theme_icon = "sun" if self._profile.base_mode == "dark" else "moon"
             theme_tip = t(

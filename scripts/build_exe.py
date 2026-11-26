@@ -54,6 +54,9 @@ HIDDEN_SUBMODULES: tuple[str, ...] = (
     "pdf_lector.ui.support_dialog",
     "pdf_lector.ui.tour_dialog",
     "pdf_lector.ui.about_updater_dialog",
+    "pdf_lector.ui.print_dialog",
+    "pdf_lector.ui.presentation_view",
+    "pdf_lector.ui.shortcuts_dialog",
 )
 
 

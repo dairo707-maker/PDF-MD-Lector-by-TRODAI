@@ -3,6 +3,24 @@
 All notable changes to **PDF/MD Lector by TRODAI** are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-26
+
+### Changed
+- **Borderless Floating Buttons, Centered Icons & Zero Clipping (`theme/palette.py`, `ui/widgets.py`, `ui/main_window.py`, `ui/viewer_view.py`, `ui/dictionary_panel.py`, `ui/ai_panel.py`, `ui/notes_panel.py`):**
+  - Replaced heavy square boxes on bar, icon, navigation, and secondary actions (`GhostAction`, `ModeTab`, `TopUtilityBtn`, `AskHeaderBtn`, `NotesHeaderBtn`) with clean floating borderless hover surfaces while keeping solid emphasis strictly on `PrimaryAction` buttons.
+  - Centered `16x16` polygonal icons cleanly inside uniform `32x32` containers with `iconOnly="true"` and removed TopBar dropdown arrows (`TopUtilityBtn::menu-indicator`).
+  - Added wrapping `FlowContainer`, widened `DictionaryPanel` (`296px`), and shortened labels (`"Preguntar IA"`, `"Consultar Wiktionary"`) so no chip or button text clips.
+- **Deduplicated TopBar & Viewer + Installer-Fixed Language (`ui/main_window.py`, `ui/viewer_view.py`, `theme/theme_profile.py`, `app.py`):**
+  - Removed duplicate TopBar Studio / AI / Fullscreen buttons, redundant Viewer Open / Settings buttons, and the runtime language switcher dropdown; UI language now follows the Windows Installer selection (`HKCU\Software\TRODAI\PDFLector\Language`).
+- **Wiktionary Default Dictionary Without HTTP 501 (`core/dictionary_engine.py`, `ui/dictionary_panel.py`):**
+  - Fixed Spanish/multilingual Wiktionary lookups (replacing abandoned `es.wiktionary.org/api/rest_v1` HTTP 501 with Wikimedia `w/api.php` wikitext extraction + `en.wiktionary.org/api/rest_v1` fallback + live `opensearch` suggestions) and enabled automatic background Wiktionary queries by default with SQLite caching (automatically paused when `Solo offline` is active).
+
+### Added
+- **In-Document Text Search (`Ctrl+F`) (`core/pdf_engine.py`, `ui/pdf_canvas.py`, `ui/viewer_view.py`):** Collapsible find bar with match counter, `Aa` case-sensitive toggle, Next/Prev navigation, PDFium character-box canvas highlighting, and Markdown text search.
+- **System Print Dialog (`Ctrl+P`) (`ui/print_dialog.py`, `assets/icons/printer.svg`):** Queries live `QPrinterInfo.availablePrinters()` and per-printer `supportedPageSizes()`, supporting page range (`Todas`, `Actual`, custom `1-3, 5`), copies, orientation, DPI (`150`/`300`/`600`), color/grayscale, scaling, and Windows native driver properties (`QPrintDialog`).
+- **Presentation Mode (`F5` / `Ctrl+L`) + Wireless Clicker Support (`ui/presentation_view.py`, `assets/icons/presentation.svg`):** Distraction-free full-screen PDF slide presenter supporting wireless clickers (`PgDn`/`PgUp`/`Space`/`Return`/`B`/`.`/`W`/`Home`/`End`/mouse click) and an auto-hiding bottom-center hover exit HUD (`Esc`).
+- **Conventional Shortcuts & Pointer-Reactive Hub Motion (`ui/shortcuts_dialog.py`, `assets/icons/keyboard.svg`, `theme/motion_engine.py`):** Wired `Ctrl+O/S/W/F/P/0/+/-/R/K/Z` + `F1` shortcut reference dialog, and added cursor-reactive Hub hero backdrop motion (disabled in Viewer reading mode).
+
 ## [0.2.0] - 2026-11-26
 
 ### Fixed

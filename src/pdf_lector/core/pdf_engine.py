@@ -34,6 +34,15 @@ class WordBox:
     page_index: int = 0
 
 
+@dataclass(frozen=True)
+class SearchHit:
+    """Single PDF text search match with unrotated PDF bounding rect and snippet."""
+
+    page_index: int
+    rect_pdf: tuple[float, float, float, float]
+    snippet: str = ""
+
+
 class RenderSignals(QObject):
     """Qt signals emitted from background PDF render tasks (connect with Qt.QueuedConnection)."""
 
@@ -232,6 +241,74 @@ class PdfDocumentSession:
             if len(words) >= limit:
                 break
         return words
+
+    def search_text(
+        self,
+        query: str,
+        *,
+        case_sensitive: bool = False,
+        max_hits: int = 250,
+    ) -> list[SearchHit]:
+        """Search all pages for matching text occurrences using PDFium."""
+        self._require_open()
+        needle = str(query or "").strip()
+        if not needle or max_hits <= 0:
+            return []
+
+        hits: list[SearchHit] = []
+        assert self._doc is not None
+        for page_index in range(len(self._doc)):
+            if len(hits) >= max_hits:
+                break
+            page = self._doc[page_index]
+            textpage = page.get_textpage()
+            try:
+                page_text = textpage.get_text_range() or ""
+                searcher = textpage.search(
+                    needle,
+                    match_case=bool(case_sensitive),
+                    match_whole_word=False,
+                )
+                while len(hits) < max_hits:
+                    char_range = searcher.get_next()
+                    if not char_range:
+                        break
+                    first_idx, count = int(char_range[0]), int(char_range[1])
+                    if count <= 0:
+                        continue
+                    rect_boxes = []
+                    for i in range(first_idx, first_idx + count):
+                        try:
+                            l, b, r, t = textpage.get_charbox(i)
+                            rect_boxes.append((l, b, r, t))
+                        except Exception:
+                            pass
+                    if not rect_boxes:
+                        continue
+                    x0 = min(b[0] for b in rect_boxes)
+                    y0 = min(b[1] for b in rect_boxes)
+                    x1 = max(b[2] for b in rect_boxes)
+                    y1 = max(b[3] for b in rect_boxes)
+                    start_ctx = max(0, first_idx - 24)
+                    end_ctx = min(len(page_text), first_idx + count + 24)
+                    snippet = " ".join(page_text[start_ctx:end_ctx].split())
+                    hits.append(
+                        SearchHit(
+                            page_index=page_index,
+                            rect_pdf=(float(x0), float(y0), float(x1), float(y1)),
+                            snippet=snippet,
+                        )
+                    )
+            finally:
+                try:
+                    textpage.close()
+                except Exception:
+                    pass
+                try:
+                    page.close()
+                except Exception:
+                    pass
+        return hits
 
     def _require_open(self) -> None:
         with self._lock:

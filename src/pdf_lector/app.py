@@ -20,22 +20,32 @@ from .core.i18n import t
 from .core.single_instance import SingleInstanceLock
 from .core.win32_bridge import set_app_user_model_id
 from .theme.palette import build_trodai_qss, register_embedded_fonts
-from .theme.theme_profile import ThemeProfile, default_profile, get_preset, get_theme_config_path
+from .theme.theme_profile import (
+    ThemeProfile,
+    default_profile,
+    get_preset,
+    get_theme_config_path,
+    read_installer_language,
+)
 from .ui.splash_screen import SplashScreen
 
 
 def _fast_load_theme_profile() -> ThemeProfile:
     """Load theme profile JSON without slow media disk stats during Phase-1 boot."""
     target = get_theme_config_path()
-    if not target.exists():
-        return default_profile()
-    try:
-        raw = json.loads(target.read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            return ThemeProfile.from_dict(raw, check_media_exists=False)
-    except Exception:
-        pass
-    return default_profile()
+    prof = default_profile()
+    if target.exists():
+        try:
+            raw = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                prof = ThemeProfile.from_dict(raw, check_media_exists=False)
+        except Exception:
+            pass
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        inst_lang = read_installer_language(default=prof.language)
+        if inst_lang != prof.language:
+            prof = replace(prof, language=inst_lang)
+    return prof
 
 
 def _generate_demo_photo_banner(target_path: Path) -> Path:
