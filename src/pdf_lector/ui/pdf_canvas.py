@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import math
 from pathlib import Path
 import time
-from typing import Sequence
+from typing import Callable, Sequence
 import uuid
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, QTimer, Qt, Signal
@@ -46,6 +47,8 @@ from ..core.pdf_annotations import (
     sanitize_color_hex,
 )
 from ..core.pdf_engine import PdfDocumentSession
+from ..theme.palette import get_palette
+from .svg_icons import load_svg_icon
 from .widgets import AdaptiveButton
 
 CLASSIC_HIGHLIGHT_PALETTE = CLASSIC_HIGHLIGHT_COLORS
@@ -53,33 +56,56 @@ VALID_TOOL_MODES = ("select", "highlight", "note", "ink", "eraser")
 
 _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
     "es": {
-        "dict.context_lookup": "Buscar en diccionario",
+        "dict.context_lookup": "Diccionario",
         "canvas.highlight": "Resaltar",
-        "canvas.add_note": "Anadir nota",
+        "canvas.add_note": "Nota adhesiva",
+        "canvas.comment": "Comentar",
+        "canvas.copy": "Copiar",
         "canvas.reply": "Responder",
         "canvas.undo": "Deshacer",
         "canvas.note_prompt": "Texto de la nota adhesiva:",
-        "canvas.reply_prompt": "Respuesta al comentario:",
+        "canvas.reply_prompt": "Comentario o respuesta:",
     },
     "en": {
-        "dict.context_lookup": "Look up in dictionary",
+        "dict.context_lookup": "Dictionary",
         "canvas.highlight": "Highlight",
-        "canvas.add_note": "Add note",
+        "canvas.add_note": "Sticky note",
+        "canvas.comment": "Comment",
+        "canvas.copy": "Copy",
         "canvas.reply": "Reply",
         "canvas.undo": "Undo",
         "canvas.note_prompt": "Sticky note content:",
-        "canvas.reply_prompt": "Reply to comment:",
+        "canvas.reply_prompt": "Comment or reply:",
     },
     "pt": {
-        "dict.context_lookup": "Buscar no dicionario",
+        "dict.context_lookup": "Dicionario",
         "canvas.highlight": "Realcar",
-        "canvas.add_note": "Adicionar nota",
+        "canvas.add_note": "Nota adesiva",
+        "canvas.comment": "Comentar",
+        "canvas.copy": "Copiar",
         "canvas.reply": "Responder",
         "canvas.undo": "Desfazer",
         "canvas.note_prompt": "Texto da nota adesiva:",
-        "canvas.reply_prompt": "Resposta ao comentario:",
+        "canvas.reply_prompt": "Comentario ou resposta:",
     },
 }
+
+
+@dataclass
+class SharedAnnotationState:
+    """Shared document-wide annotation store across multi-page PdfCanvas widgets."""
+
+    records: list[AnnotationRecord] = field(default_factory=list)
+    undo_stack: list[tuple[str, AnnotationRecord]] = field(default_factory=list)
+    dirty: bool = False
+    listeners: list[Callable[[], None]] = field(default_factory=list)
+
+    def notify(self) -> None:
+        for cb in list(self.listeners):
+            try:
+                cb()
+            except Exception:
+                pass
 
 
 def _tc(key: str, lang: str = "es") -> str:
@@ -114,7 +140,12 @@ class PdfCanvas(QWidget):
     pan_delta_requested = Signal(float, float)
     annotation_selected = Signal(object)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        shared_state: SharedAnnotationState | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         self.setMouseTracking(True)
@@ -128,9 +159,8 @@ class PdfCanvas(QWidget):
         self._rotation: int = 0
         self._rendered_pixmap: QPixmap | None = None
 
-        self._annotations: list[AnnotationRecord] = []
-        self._undo_stack: list[tuple[str, AnnotationRecord]] = []
-        self._dirty: bool = False
+        self._shared_state = shared_state or SharedAnnotationState()
+        self._shared_state.listeners.append(self._on_shared_state_mutated)
 
         self._tool_mode: str = "select"
         self._active_color: str = DEFAULT_HIGHLIGHT_COLOR
@@ -159,6 +189,48 @@ class PdfCanvas(QWidget):
         undo_sc = QShortcut(QKeySequence("Ctrl+Z"), self)
         undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         undo_sc.activated.connect(self.undo_last_annotation)
+
+        esc_sc = QShortcut(QKeySequence("Escape"), self)
+        esc_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        esc_sc.activated.connect(self.clear_selection)
+
+    @property
+    def _annotations(self) -> list[AnnotationRecord]:
+        return self._shared_state.records
+
+    @_annotations.setter
+    def _annotations(self, value: list[AnnotationRecord]) -> None:
+        self._shared_state.records = value
+
+    @property
+    def _undo_stack(self) -> list[tuple[str, AnnotationRecord]]:
+        return self._shared_state.undo_stack
+
+    @_undo_stack.setter
+    def _undo_stack(self, value: list[tuple[str, AnnotationRecord]]) -> None:
+        self._shared_state.undo_stack = value
+
+    @property
+    def _dirty(self) -> bool:
+        return self._shared_state.dirty
+
+    @_dirty.setter
+    def _dirty(self, value: bool) -> None:
+        self._shared_state.dirty = bool(value)
+
+    def _on_shared_state_mutated(self) -> None:
+        if shiboken6.isValid(self):
+            self.update()
+
+    def clear_selection(self) -> None:
+        self._selection_quads_pdf.clear()
+        self._selected_text = ""
+        self._selected_word = ""
+        self._hide_popover()
+        self.update()
+
+    def hide_popover(self) -> None:
+        self._hide_popover()
 
     def set_session(self, session: PdfDocumentSession | None, page_index: int = 0) -> None:
         self._session = session
@@ -630,15 +702,116 @@ class PdfCanvas(QWidget):
         if not clean:
             return
 
+        p = get_palette(self._mode)
         pop = QFrame(self)
-        pop.setObjectName("CardPanel")
+        pop.setObjectName("SelectionPopover")
+        pop.setStyleSheet(
+            f"QFrame#SelectionPopover {{ background-color: {p['bg_menu']}; color: {p['text_primary']}; "
+            f"border: 1px solid {p['border_strong']}; }}"
+        )
         pop_layout = QHBoxLayout(pop)
-        pop_layout.setContentsMargins(6, 4, 6, 4)
+        pop_layout.setContentsMargins(6, 5, 6, 5)
         pop_layout.setSpacing(4)
 
-        dict_btn = AdaptiveButton(_tc("dict.context_lookup", self._lang), pop, role="PrimaryAction")
-        dict_btn.setMinimumHeight(26)
-        dict_btn.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        hl_btn = AdaptiveButton(_tc("canvas.highlight", self._lang), pop, role="PrimaryAction")
+        hl_btn.setIcon(load_svg_icon("edit", color=p["primary_fg"], size=13))
+        hl_btn.setMinimumHeight(26)
+        hl_btn.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+
+        def _on_highlight() -> None:
+            if self._selection_quads_pdf:
+                for qrect in self._selection_quads_pdf:
+                    self.add_highlight_rect(qrect, color_hex=self._active_color)
+                self._selection_quads_pdf.clear()
+            QTimer.singleShot(0, self._hide_popover)
+
+        hl_btn.clicked.connect(_on_highlight)
+        pop_layout.addWidget(hl_btn)
+
+        for col in CLASSIC_HIGHLIGHT_PALETTE:
+            sw = QPushButton("", pop)
+            sw.setFixedSize(16, 16)
+            sw.setToolTip(f"{_tc('canvas.highlight', self._lang)} ({col})")
+            sw.setStyleSheet(f"background-color: {col}; border: 1px solid {p['border_strong']}; padding: 0px;")
+
+            def _on_swatch(_checked: bool = False, hex_c: str = col) -> None:
+                self.set_highlight_color(hex_c)
+                if self._selection_quads_pdf:
+                    for qrect in self._selection_quads_pdf:
+                        self.add_highlight_rect(qrect, color_hex=hex_c)
+                    self._selection_quads_pdf.clear()
+                QTimer.singleShot(0, self._hide_popover)
+
+            sw.clicked.connect(_on_swatch)
+            pop_layout.addWidget(sw)
+
+        note_btn = QPushButton("", pop)
+        note_btn.setProperty("role", "GhostAction")
+        note_btn.setFixedSize(26, 26)
+        note_btn.setStyleSheet("padding: 2px;")
+        note_btn.setIcon(load_svg_icon("comment", color=p["icon_color"], size=13))
+        note_btn.setToolTip(_tc("canvas.add_note", self._lang))
+
+        def _on_note() -> None:
+            anchor_rect = self._selection_quads_pdf[0] if self._selection_quads_pdf else (72.0, 680.0, 120.0, 700.0)
+            txt, ok = QInputDialog.getText(
+                self,
+                _tc("canvas.add_note", self._lang),
+                _tc("canvas.note_prompt", self._lang),
+            )
+            if ok and txt.strip():
+                self.add_sticky_note((anchor_rect[0], anchor_rect[1]), txt.strip())
+            QTimer.singleShot(0, self._hide_popover)
+
+        note_btn.clicked.connect(_on_note)
+        pop_layout.addWidget(note_btn)
+
+        comment_btn = QPushButton("", pop)
+        comment_btn.setProperty("role", "GhostAction")
+        comment_btn.setFixedSize(26, 26)
+        comment_btn.setStyleSheet("padding: 2px;")
+        comment_btn.setIcon(load_svg_icon("spark", color=p["icon_color"], size=13))
+        comment_btn.setToolTip(_tc("canvas.comment", self._lang))
+
+        def _on_comment() -> None:
+            quads = list(self._selection_quads_pdf)
+            txt, ok = QInputDialog.getText(
+                self,
+                _tc("canvas.comment", self._lang),
+                _tc("canvas.reply_prompt", self._lang),
+            )
+            if ok and txt.strip() and quads:
+                parent_hl = self.add_highlight_rect(quads[0], color_hex=self._active_color, content=txt.strip())
+                self.add_reply(parent_hl.id, txt.strip())
+                self._selection_quads_pdf.clear()
+            QTimer.singleShot(0, self._hide_popover)
+
+        comment_btn.clicked.connect(_on_comment)
+        pop_layout.addWidget(comment_btn)
+
+        copy_btn = QPushButton("", pop)
+        copy_btn.setProperty("role", "GhostAction")
+        copy_btn.setFixedSize(26, 26)
+        copy_btn.setStyleSheet("padding: 2px;")
+        copy_btn.setIcon(load_svg_icon("copy", color=p["icon_color"], size=13))
+        copy_btn.setToolTip(_tc("canvas.copy", self._lang))
+
+        def _on_copy() -> None:
+            cb = QApplication.clipboard()
+            payload = (self._selected_text or clean).strip()
+            if cb is not None and payload:
+                cb.setText(payload)
+            QTimer.singleShot(0, self._hide_popover)
+
+        copy_btn.clicked.connect(_on_copy)
+        pop_layout.addWidget(copy_btn)
+
+        dict_btn = QPushButton("", pop)
+        dict_btn.setProperty("role", "GhostAction")
+        dict_btn.setFixedSize(26, 26)
+        dict_btn.setStyleSheet("padding: 2px;")
+        dict_btn.setIcon(load_svg_icon("book", color=p["icon_color"], size=13))
+        dict_btn.setToolTip(_tc("dict.context_lookup", self._lang))
 
         def _on_lookup() -> None:
             self.request_dictionary_lookup(clean)
@@ -647,26 +820,22 @@ class PdfCanvas(QWidget):
         dict_btn.clicked.connect(_on_lookup)
         pop_layout.addWidget(dict_btn)
 
-        for col in CLASSIC_HIGHLIGHT_PALETTE:
-            sw = QPushButton("", pop)
-            sw.setFixedSize(16, 16)
-            sw.setStyleSheet(f"background-color: {col}; border: 1px solid #334155; padding: 0px;")
-
-            def _on_swatch(_checked: bool = False, hex_c: str = col) -> None:
-                if self._selection_quads_pdf:
-                    for qrect in self._selection_quads_pdf:
-                        self.add_highlight_rect(qrect, color_hex=hex_c)
-                QTimer.singleShot(0, self._hide_popover)
-
-            sw.clicked.connect(_on_swatch)
-            pop_layout.addWidget(sw)
-
         pop.adjustSize()
-        px = max(4, min(max(4, self.width() - pop.width() - 4), pos_px.x()))
-        py = max(4, pos_px.y() - pop.height() - 6)
+        px = max(4, min(max(4, self.width() - pop.width() - 4), pos_px.x() - pop.width() // 2))
+        py = max(4, pos_px.y() - pop.height() - 8)
         pop.move(px, py)
         pop.show()
         self._popover = pop
+
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta_y = event.angleDelta().y()
+            if delta_y != 0:
+                self.zoom_delta_requested.emit(0.15 if delta_y > 0 else -0.15)
+            event.accept()
+            return
+        self._hide_popover()
+        event.ignore()
 
     def tabletEvent(self, event: QTabletEvent) -> None:
         etype = event.type()

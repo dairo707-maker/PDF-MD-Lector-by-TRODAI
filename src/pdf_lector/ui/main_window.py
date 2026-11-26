@@ -1,4 +1,4 @@
-"""Main window shell for PDF/MD Lector by TRODAI: Min/Max/Close, F11 Fullscreen, Update Banner, Dialogs & Dual Workspace."""
+"""Main window shell for PDF/MD Lector by TRODAI: Collapsible Ribbon Sidebar, Recents, Preferences, AI Chat & Tool Host."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QFont, QIcon, QK
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -29,6 +28,7 @@ from PySide6.QtWidgets import (
 import shiboken6
 
 from .. import APP_NAME, COMPANY_NAME, get_base_dir, read_version
+from ..core.ai_chat_history import AiChatHistoryStore
 from ..core.bookmarks_store import BookmarksStore
 from ..core.crash_guard import CrashGuard
 from ..core.dictionary_engine import DictionaryEngine
@@ -36,6 +36,7 @@ from ..core.i18n import t
 from ..core.notifications import NotificationCenter
 from ..core.path_guard import ALLOWED_MEDIA_EXTENSIONS, validate_local_any_doc
 from ..core.pdf_engine import generate_sample_pdf
+from ..core.recent_docs import RecentDocumentsStore
 from ..core.task_control import TaskManager
 from ..core.tools import ToolRegistry
 from ..core.updater import ReleaseInfo, load_updater_state, save_updater_state
@@ -45,6 +46,7 @@ from ..theme.motion_engine import MotionPerformanceGuard, ViewTransitionControll
 from ..theme.palette import MONO_FONT_FAMILY, UI_FONT_FAMILY, build_trodai_qss, get_palette
 from ..theme.theme_profile import ThemeProfile, save_theme_profile
 from .hub_view import HubView
+from .preferences_dialog import UserPreferences, load_preferences
 from .svg_icons import load_multicolor_svg_pixmap, load_svg_icon, load_svg_pixmap
 from .theme_studio import ThemeStudioView
 from .viewer_view import MarkdownTabPage, PdfTabPage, ViewerView
@@ -52,7 +54,7 @@ from .widgets import AdaptiveButton, SlidingNavPanel, StatusTag
 
 
 class MainWindow(QMainWindow):
-    """Dual-workspace application shell honoring 1366x720 screen-safe sizing, Min/Max/Close, Fullscreen, and TRODAI UX."""
+    """Dual-workspace application shell honoring 1366x720 screen-safe sizing, Adobe-style reader collapse, and TRODAI UX."""
 
     def __init__(
         self,
@@ -64,6 +66,8 @@ class MainWindow(QMainWindow):
         insights_store: LocalUsageInsights | None = None,
         bookmarks_store: BookmarksStore | None = None,
         dictionary_engine: DictionaryEngine | None = None,
+        recent_store: RecentDocumentsStore | None = None,
+        ai_history_store: AiChatHistoryStore | None = None,
         notification_center: NotificationCenter | None = None,
         task_manager: TaskManager | None = None,
         crash_guard: CrashGuard | None = None,
@@ -72,6 +76,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._profile = initial_profile.sanitized(check_media_exists=False)
         self._persist_profile = persist_profile
+        self._applied_base_mode: str = ""
         self._guard = guard or MotionPerformanceGuard()
         self._sample_pdf_dir = sample_pdf_dir
         self._insights = insights_store or LocalUsageInsights()
@@ -79,13 +84,23 @@ class MainWindow(QMainWindow):
         self.bookmarks_store = self._bookmarks
         self._dict_engine = dictionary_engine or DictionaryEngine()
         self.dictionary_engine = self._dict_engine
+        self.recent_docs = recent_store or RecentDocumentsStore()
+        self.ai_history_store = ai_history_store or AiChatHistoryStore()
         self.notification_center = notification_center or NotificationCenter()
         self.task_manager = task_manager or TaskManager(parent=self)
         self.crash_guard = crash_guard
         self._updater_state_path = updater_state_path
         self._active_release: ReleaseInfo | None = None
-        self._ai_panel: QWidget | None = None
+        self._ai_panel: Any = None
+        self._active_tool_workspace: Any = None
         self._is_fullscreen = False
+        self._sidebar_collapsed = False
+        self._prefs: UserPreferences = load_preferences()
+
+        self._profile_save_timer = QTimer(self)
+        self._profile_save_timer.setSingleShot(True)
+        self._profile_save_timer.setInterval(250)
+        self._profile_save_timer.timeout.connect(self._flush_profile_save)
 
         self.setWindowTitle(f"{APP_NAME} · by {COMPANY_NAME}")
         self.setWindowFlags(
@@ -111,47 +126,61 @@ class MainWindow(QMainWindow):
         self._root_h_layout.setContentsMargins(0, 0, 0, 0)
         self._root_h_layout.setSpacing(0)
 
-        # Compact Left Sidebar
+        # Collapsible Left Sidebar (226px expanded <-> 40px ribbon tab in Viewer)
         self.sidebar = QWidget(self.root_canvas)
         self.sidebar.setObjectName("Sidebar")
         self.sidebar.setFixedWidth(226)
-        sb_layout = QVBoxLayout(self.sidebar)
+        sidebar_root_lay = QVBoxLayout(self.sidebar)
+        sidebar_root_lay.setContentsMargins(0, 0, 0, 0)
+        sidebar_root_lay.setSpacing(0)
+
+        # Expanded Host
+        self._sidebar_expanded = QWidget(self.sidebar)
+        self._sidebar_expanded.setObjectName("TransparentHost")
+        sb_layout = QVBoxLayout(self._sidebar_expanded)
         sb_layout.setContentsMargins(12, 14, 12, 12)
         sb_layout.setSpacing(8)
 
-        # App Identity Header
         app_head = QHBoxLayout()
-        app_head.setSpacing(10)
-        self.app_logo_lbl = QLabel(self.sidebar)
-        self.app_logo_lbl.setFixedSize(38, 38)
+        app_head.setSpacing(8)
+        self.app_logo_lbl = QLabel(self._sidebar_expanded)
+        self.app_logo_lbl.setFixedSize(36, 36)
         app_head.addWidget(self.app_logo_lbl)
 
         app_txt_col = QVBoxLayout()
         app_txt_col.setSpacing(1)
-        self.app_title_lbl = QLabel(APP_NAME, self.sidebar)
-        at_f = QFont(UI_FONT_FAMILY, 13)
+        self.app_title_lbl = QLabel(APP_NAME, self._sidebar_expanded)
+        at_f = QFont(UI_FONT_FAMILY, 12)
         at_f.setWeight(QFont.Weight.Bold)
         self.app_title_lbl.setFont(at_f)
         app_txt_col.addWidget(self.app_title_lbl)
 
-        self.app_ver_lbl = QLabel(f"v{read_version()}", self.sidebar)
+        self.app_ver_lbl = QLabel(f"v{read_version()}", self._sidebar_expanded)
         self.app_ver_lbl.setProperty("mono", "true")
         self.app_ver_lbl.setProperty("tone", "muted")
         self.app_ver_lbl.setFont(QFont(MONO_FONT_FAMILY, 8))
         app_txt_col.addWidget(self.app_ver_lbl)
         app_head.addLayout(app_txt_col, 1)
+
+        self.sidebar_collapse_btn = QPushButton("", self._sidebar_expanded)
+        self.sidebar_collapse_btn.setProperty("role", "GhostAction")
+        self.sidebar_collapse_btn.setFixedSize(26, 26)
+        self.sidebar_collapse_btn.setStyleSheet("padding: 2px;")
+        self.sidebar_collapse_btn.setToolTip("Contraer panel lateral")
+        self.sidebar_collapse_btn.clicked.connect(lambda: self.set_sidebar_collapsed(True))
+        app_head.addWidget(self.sidebar_collapse_btn, 0, Qt.AlignmentFlag.AlignTop)
         sb_layout.addLayout(app_head)
 
-        self.open_sidebar_btn = AdaptiveButton("", self.sidebar, role="PrimaryAction")
+        self.open_sidebar_btn = AdaptiveButton("", self._sidebar_expanded, role="PrimaryAction")
         self.open_sidebar_btn.clicked.connect(self._open_document_dialog)
         sb_layout.addWidget(self.open_sidebar_btn)
 
-        nav_sep = QFrame(self.sidebar)
+        nav_sep = QFrame(self._sidebar_expanded)
         nav_sep.setFixedHeight(1)
         nav_sep.setStyleSheet("background-color: #334155;")
         sb_layout.addWidget(nav_sep)
 
-        self.nav_panel = SlidingNavPanel(self.sidebar)
+        self.nav_panel = SlidingNavPanel(self._sidebar_expanded)
         self.nav_panel.set_items([
             ("home", ""),
             ("viewer", ""),
@@ -162,43 +191,88 @@ class MainWindow(QMainWindow):
 
         sb_layout.addStretch(1)
 
-        # Separated Company Seal Footer ("by TRODAI" + Hexa-Vault Sentinel)
-        seal_sep = QFrame(self.sidebar)
+        seal_sep = QFrame(self._sidebar_expanded)
         seal_sep.setFixedHeight(1)
         seal_sep.setStyleSheet("background-color: #334155;")
         sb_layout.addWidget(seal_sep)
 
-        self.privacy_tag = StatusTag("PROCESO LOCAL", tone="ok", parent=self.sidebar)
+        self.privacy_tag = StatusTag("PROCESO LOCAL", tone="ok", parent=self._sidebar_expanded)
         sb_layout.addWidget(self.privacy_tag)
 
         seal_row = QHBoxLayout()
         seal_row.setContentsMargins(2, 4, 2, 2)
         seal_row.setSpacing(8)
-        self.trodai_sentinel_lbl = QLabel(self.sidebar)
+        self.trodai_sentinel_lbl = QLabel(self._sidebar_expanded)
         self.trodai_sentinel_lbl.setFixedSize(20, 20)
         seal_row.addWidget(self.trodai_sentinel_lbl)
 
-        self.company_lbl = QLabel(f"by {COMPANY_NAME}", self.sidebar)
+        self.company_lbl = QLabel(f"by {COMPANY_NAME}", self._sidebar_expanded)
         co_f = QFont(UI_FONT_FAMILY, 10)
         co_f.setWeight(QFont.Weight.Medium)
         co_f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.7)
         self.company_lbl.setFont(co_f)
         seal_row.addWidget(self.company_lbl, 1)
         sb_layout.addLayout(seal_row)
+        sidebar_root_lay.addWidget(self._sidebar_expanded)
+
+        # Collapsed Ribbon Host (40px Adobe-style slim vertical tab)
+        self._sidebar_ribbon = QWidget(self.sidebar)
+        self._sidebar_ribbon.setObjectName("SidebarRibbon")
+        self._sidebar_ribbon.setVisible(False)
+        rib_lay = QVBoxLayout(self._sidebar_ribbon)
+        rib_lay.setContentsMargins(5, 10, 5, 10)
+        rib_lay.setSpacing(8)
+
+        self.rib_expand_btn = QPushButton("", self._sidebar_ribbon)
+        self.rib_expand_btn.setProperty("role", "GhostAction")
+        self.rib_expand_btn.setFixedSize(30, 30)
+        self.rib_expand_btn.setStyleSheet("padding: 3px;")
+        self.rib_expand_btn.setToolTip("Desplegar menu lateral")
+        self.rib_expand_btn.clicked.connect(lambda: self.set_sidebar_collapsed(False))
+        rib_lay.addWidget(self.rib_expand_btn)
+
+        self.rib_open_btn = QPushButton("", self._sidebar_ribbon)
+        self.rib_open_btn.setProperty("role", "PrimaryAction")
+        self.rib_open_btn.setFixedSize(30, 30)
+        self.rib_open_btn.setStyleSheet("padding: 3px;")
+        self.rib_open_btn.clicked.connect(self._open_document_dialog)
+        rib_lay.addWidget(self.rib_open_btn)
+
+        rib_sep = QFrame(self._sidebar_ribbon)
+        rib_sep.setFixedHeight(1)
+        rib_sep.setStyleSheet("background-color: #334155;")
+        rib_lay.addWidget(rib_sep)
+
+        self.rib_nav_btns: list[QPushButton] = []
+        for idx, _icon in enumerate(("home", "viewer", "palette")):
+            rb = QPushButton("", self._sidebar_ribbon)
+            rb.setProperty("role", "ModeTab")
+            rb.setCheckable(True)
+            rb.setFixedSize(30, 30)
+            rb.setStyleSheet("padding: 3px;")
+            rb.clicked.connect(lambda _=False, i=idx: self.switch_view(i))
+            rib_lay.addWidget(rb)
+            self.rib_nav_btns.append(rb)
+
+        rib_lay.addStretch(1)
+        self.rib_sentinel_lbl = QLabel(self._sidebar_ribbon)
+        self.rib_sentinel_lbl.setFixedSize(20, 20)
+        rib_lay.addWidget(self.rib_sentinel_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+        sidebar_root_lay.addWidget(self._sidebar_ribbon)
 
         self._root_h_layout.addWidget(self.sidebar)
 
-        # Right Column: Minimalist TopBar + Solid Update Banner + Stacked Dual Workspace
+        # Right Column: Minimalist TopBar + Solid Update Banner + Stacked Workspace
         main_col = QVBoxLayout()
         main_col.setContentsMargins(0, 0, 0, 0)
         main_col.setSpacing(0)
 
         self.topbar = QWidget(self.root_canvas)
         self.topbar.setObjectName("TopBar")
-        self.topbar.setFixedHeight(50)
+        self.topbar.setFixedHeight(48)
         tb_layout = QHBoxLayout(self.topbar)
         tb_layout.setContentsMargins(14, 8, 14, 8)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(6)
 
         self.top_search = QLineEdit(self.topbar)
         self.top_search.setMinimumWidth(140)
@@ -208,7 +282,7 @@ class MainWindow(QMainWindow):
 
         tb_layout.addStretch(1)
 
-        self.top_studio_btn = AdaptiveButton("", self.topbar)
+        self.top_studio_btn = QPushButton("", self.topbar)
         self.top_studio_btn.setObjectName("TopUtilityBtn")
         self.top_studio_btn.clicked.connect(lambda: self.switch_view(2))
         tb_layout.addWidget(self.top_studio_btn)
@@ -228,10 +302,17 @@ class MainWindow(QMainWindow):
         self.top_notif_btn.clicked.connect(self.open_notifications_dialog)
         tb_layout.addWidget(self.top_notif_btn)
 
+        self.top_settings_btn = QPushButton("", self.topbar)
+        self.top_settings_btn.setObjectName("TopUtilityBtn")
+        self.top_settings_btn.setFixedSize(34, 30)
+        self.top_settings_btn.setToolTip("Configuracion y Preferencias")
+        self.top_settings_btn.clicked.connect(self.open_preferences_dialog)
+        tb_layout.addWidget(self.top_settings_btn)
+
         self.top_menu_btn = QPushButton("", self.topbar)
         self.top_menu_btn.setObjectName("TopUtilityBtn")
         self.top_menu_btn.setFixedSize(34, 30)
-        self.top_menu_btn.setToolTip("Opciones, Soporte y Acerca de")
+        self.top_menu_btn.setToolTip("Mas herramientas, Soporte y Acerca de")
         self._build_utility_menu()
         tb_layout.addWidget(self.top_menu_btn)
 
@@ -290,9 +371,14 @@ class MainWindow(QMainWindow):
         ub_lay.addWidget(self.ub_close_btn)
         main_col.addWidget(self.update_banner)
 
-        # Workspace Stack
+        # Workspace Stack (0=Hub, 1=Viewer, 2=Theme Studio, 3=Inline Tool Runner)
         self.stack = QStackedWidget(self.root_canvas)
-        self.hub_view = HubView(insights=self._insights, guard=self._guard, parent=self.stack)
+        self.hub_view = HubView(
+            insights=self._insights,
+            recent_store=self.recent_docs,
+            guard=self._guard,
+            parent=self.stack,
+        )
         self.viewer_view = ViewerView(
             bookmarks_store=self._bookmarks,
             dictionary_engine=self._dict_engine,
@@ -300,10 +386,16 @@ class MainWindow(QMainWindow):
             parent=self.stack,
         )
         self.studio_view = ThemeStudioView(self._profile, guard=self._guard, parent=self.stack)
+        self.tool_host_page = QWidget(self.stack)
+        self.tool_host_page.setObjectName("TransparentHost")
+        self._tool_host_layout = QVBoxLayout(self.tool_host_page)
+        self._tool_host_layout.setContentsMargins(0, 0, 0, 0)
+        self._tool_host_layout.setSpacing(0)
 
         self.stack.addWidget(self.hub_view)
         self.stack.addWidget(self.viewer_view)
         self.stack.addWidget(self.studio_view)
+        self.stack.addWidget(self.tool_host_page)
         main_col.addWidget(self.stack, 1)
 
         self._root_h_layout.addLayout(main_col, 1)
@@ -314,11 +406,16 @@ class MainWindow(QMainWindow):
         self.hub_view.open_pdf_requested.connect(self._open_document_dialog)
         self.hub_view.open_studio_requested.connect(lambda: self.switch_view(2))
         self.hub_view.tool_activated.connect(self.open_tool_workspace)
+        self.hub_view.recent_document_requested.connect(lambda p: self.open_document_path(p, switch_to_viewer=True))
         self.studio_view.profile_changed.connect(self.apply_profile)
         self.viewer_view.backdrop_toggled.connect(self._on_viewer_backdrop_toggled)
         self.viewer_view.fullscreen_requested.connect(self.toggle_fullscreen)
         self.viewer_view.document_inspected.connect(self._on_document_inspected)
         self.viewer_view.dictionary_lookup_recorded.connect(self._insights.record_dictionary_lookup)
+        self.viewer_view.ai_panel_requested.connect(self.toggle_ai_panel)
+        self.viewer_view.preferences_requested.connect(self.open_preferences_dialog)
+        self.viewer_view.active_document_changed.connect(self._on_active_document_changed)
+        self.viewer_view.document_opened.connect(self._on_viewer_document_opened)
 
         # Keyboard shortcuts: Ctrl+K search, F11 fullscreen, Esc exit fullscreen
         self._search_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
@@ -332,6 +429,7 @@ class MainWindow(QMainWindow):
 
         self.retranslate(self._profile.language)
         self.apply_profile(self._profile, save=False)
+        self._apply_user_preferences(self._prefs)
         self.switch_view(0, immediate=True)
 
     def _build_utility_menu(self) -> None:
@@ -377,6 +475,30 @@ class MainWindow(QMainWindow):
         y = avail.y() + max(0, (avail.height() - h) // 2)
         self.move(x, y)
 
+    def set_sidebar_collapsed(self, collapsed: bool) -> None:
+        want = bool(collapsed)
+        self._sidebar_collapsed = want
+        self._sidebar_expanded.setVisible(not want)
+        self._sidebar_ribbon.setVisible(want)
+        self.sidebar.setFixedWidth(40 if want else 226)
+
+    def is_sidebar_collapsed(self) -> bool:
+        return self._sidebar_collapsed
+
+    def _apply_user_preferences(self, prefs: UserPreferences) -> None:
+        self._prefs = prefs
+        self.viewer_view.set_show_button_labels(prefs.show_button_labels)
+        self.viewer_view.set_continuous_scroll(prefs.continuous_scroll)
+        label = t("topbar.theme_studio", self._profile.language)
+        self.top_studio_btn.setToolTip(label)
+        if prefs.show_button_labels:
+            self.top_studio_btn.setText(label)
+            self.top_studio_btn.setMinimumSize(0, 30)
+            self.top_studio_btn.setMaximumSize(16777215, 30)
+        else:
+            self.top_studio_btn.setText("")
+            self.top_studio_btn.setFixedSize(34, 30)
+
     def ensure_sample_pdf_loaded(self) -> Path:
         base = self._sample_pdf_dir or (Path(tempfile.gettempdir()) / "TRODAI_PDFLector")
         sample = generate_sample_pdf(base / "Muestra_TRODAI.pdf")
@@ -410,6 +532,27 @@ class MainWindow(QMainWindow):
             return tab.md_path, tab.editor_widget.toPlainText()
         return None, ""
 
+    def _on_active_document_changed(self, doc_path: Any) -> None:
+        if self._ai_panel is not None and shiboken6.isValid(self._ai_panel):
+            self._ai_panel.set_active_document(doc_path if isinstance(doc_path, Path) else None)
+
+    def _on_viewer_document_opened(self, doc_path: Any, page_count: int) -> None:
+        if isinstance(doc_path, Path):
+            self.recent_docs.record_open(doc_path, page_count=page_count)
+            QTimer.singleShot(0, self.hub_view.refresh_recents)
+
+    def _on_ai_citation_clicked(self, page_index: int, _raw: str) -> None:
+        tab = self.viewer_view.current_tab()
+        if isinstance(tab, PdfTabPage) and page_index >= 0:
+            self.switch_view(1)
+            tab.set_page(page_index)
+
+    def _close_ai_panel(self) -> None:
+        if self._ai_panel is not None and shiboken6.isValid(self._ai_panel):
+            self._ai_panel.setVisible(False)
+        self.top_ai_btn.setChecked(False)
+        self.viewer_view.set_ai_panel_checked(False)
+
     def toggle_ai_panel(self) -> None:
         """Lazily import and toggle ui.ai_panel.AskDocumentPanel on user action."""
         if self._ai_panel is None or not shiboken6.isValid(self._ai_panel):
@@ -418,12 +561,18 @@ class MainWindow(QMainWindow):
 
                 panel = AskDocumentPanel(
                     get_active_document_callback=self.get_active_document_callback,
+                    mode=self._profile.base_mode,
+                    lang=self._profile.language,
+                    history_store=self.ai_history_store,
                     parent=self.root_canvas,
                 )
+                panel.close_requested.connect(self._close_ai_panel)
+                panel.citation_clicked.connect(self._on_ai_citation_clicked)
                 self._root_h_layout.addWidget(panel)
                 self._ai_panel = panel
             except ImportError:
                 self.top_ai_btn.setChecked(False)
+                self.viewer_view.set_ai_panel_checked(False)
                 QMessageBox.information(
                     self,
                     "Preguntar al documento",
@@ -431,8 +580,13 @@ class MainWindow(QMainWindow):
                 )
                 return
         want = not self._ai_panel.isVisible()
+        if want:
+            self._ai_panel.apply_theme(self._profile.base_mode)
+            self._ai_panel.retranslate(self._profile.language)
+            self._ai_panel.refresh_active_document()
         self._ai_panel.setVisible(want)
         self.top_ai_btn.setChecked(want)
+        self.viewer_view.set_ai_panel_checked(want)
 
     def open_tool_workspace(self, tool_id: str) -> None:
         if tool_id in ("create_visual_invoice", "create_einvoice", "validate_einvoice"):
@@ -440,18 +594,36 @@ class MainWindow(QMainWindow):
             return
         try:
             defn = ToolRegistry.get(tool_id)
-        except KeyError:
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                APP_NAME,
+                f"No se pudo abrir la herramienta '{tool_id}': {exc}",
+            )
             return
+
         from .tool_workspace import ToolWorkspace
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle(t(defn.title_key, self._profile.language))
-        dlg.setMinimumSize(680, 520)
-        lay = QVBoxLayout(dlg)
-        lay.setContentsMargins(0, 0, 0, 0)
-        ws = ToolWorkspace(defn, lang=self._profile.language, mode=self._profile.base_mode, parent=dlg)
-        lay.addWidget(ws)
-        dlg.exec()
+        while self._tool_host_layout.count():
+            item = self._tool_host_layout.takeAt(0)
+            w = item.widget()
+            if w is not None and shiboken6.isValid(w):
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+
+        ws = ToolWorkspace(
+            defn,
+            lang=self._profile.language,
+            mode=self._profile.base_mode,
+            show_back=True,
+            parent=self.tool_host_page,
+        )
+        ws.back_requested.connect(lambda: self.switch_view(0))
+        ws.open_output_requested.connect(lambda p: self.open_document_path(Path(p), switch_to_viewer=True))
+        self._tool_host_layout.addWidget(ws, 1)
+        self._active_tool_workspace = ws
+        self.switch_view(3)
 
     def open_invoice_dialog(self) -> None:
         from .invoice_dialog import InvoiceDialog
@@ -461,12 +633,14 @@ class MainWindow(QMainWindow):
     def open_preferences_dialog(self) -> None:
         from .preferences_dialog import PreferencesDialog
 
-        PreferencesDialog(
+        dlg = PreferencesDialog(
             insights_store=self._insights,
             lang=self._profile.language,
             mode=self._profile.base_mode,
             parent=self,
-        ).exec()
+        )
+        if dlg.exec():
+            self._apply_user_preferences(load_preferences())
         QTimer.singleShot(0, self.hub_view.refresh_recommendations)
 
     def open_notifications_dialog(self) -> None:
@@ -561,7 +735,17 @@ class MainWindow(QMainWindow):
 
     def switch_view(self, index: int, *, immediate: bool = False) -> None:
         self.transitions.switch_to(index, self._profile, immediate=immediate)
-        self.nav_panel.set_current_index(index, animate=(not immediate))
+        nav_idx = index if index in (0, 1, 2) else 0
+        self.nav_panel.set_current_index(nav_idx, animate=(not immediate))
+        for i, rb in enumerate(self.rib_nav_btns):
+            rb.blockSignals(True)
+            rb.setChecked(i == nav_idx)
+            rb.blockSignals(False)
+        # Auto-collapse left sidebar into ribbon when reading in Viewer so document dominates screen
+        if index == 1:
+            self.set_sidebar_collapsed(True)
+        elif index in (0, 2):
+            self.set_sidebar_collapsed(False)
 
     @property
     def current_profile(self) -> ThemeProfile:
@@ -639,68 +823,91 @@ class MainWindow(QMainWindow):
 
     def retranslate(self, lang: str) -> None:
         self.open_sidebar_btn.setText(t("nav.open_pdf", lang))
-        self.nav_panel.update_labels([
-            t("nav.hub", lang),
-            t("nav.viewer", lang),
-            t("nav.studio", lang),
-        ])
+        self.rib_open_btn.setToolTip(t("nav.open_pdf", lang))
+        nav_labels = [t("nav.hub", lang), t("nav.viewer", lang), t("nav.studio", lang)]
+        self.nav_panel.update_labels(nav_labels)
+        for rb, lbl in zip(self.rib_nav_btns, nav_labels):
+            rb.setToolTip(lbl)
+
         self.top_search.setPlaceholderText(t("topbar.search_placeholder", lang))
-        self.top_studio_btn.setText(t("topbar.theme_studio", lang))
+        studio_lbl = t("topbar.theme_studio", lang)
+        self.top_studio_btn.setToolTip(studio_lbl)
+        if self._prefs.show_button_labels:
+            self.top_studio_btn.setText(studio_lbl)
         self.top_fullscreen_btn.setToolTip(t("topbar.fullscreen", lang))
         self.privacy_tag.setText(t("sidebar.privacy_tag", lang))
 
         self.hub_view.retranslate(lang)
         self.viewer_view.retranslate(lang)
         self.studio_view.retranslate(lang)
+        if self._ai_panel is not None and shiboken6.isValid(self._ai_panel):
+            self._ai_panel.retranslate(lang)
+
+    def _flush_profile_save(self) -> None:
+        if self._persist_profile:
+            save_theme_profile(self._profile)
 
     def apply_profile(self, profile: ThemeProfile, *, save: bool = True) -> None:
         self._profile = profile.sanitized(check_media_exists=False)
         p = get_palette(self._profile.base_mode)
+        mode_changed = self._profile.base_mode != self._applied_base_mode
 
-        app = QApplication.instance()
-        if isinstance(app, QApplication):
-            app.setStyleSheet(build_trodai_qss(self._profile.base_mode))
+        if mode_changed:
+            self._applied_base_mode = self._profile.base_mode
+            app = QApplication.instance()
+            if isinstance(app, QApplication):
+                app.setStyleSheet(build_trodai_qss(self._profile.base_mode))
 
-        try:
-            apply_trodai_window_chrome(
-                int(self.winId()),
-                dark_mode=(self._profile.base_mode == "dark"),
-                acrylic=False,
+            try:
+                apply_trodai_window_chrome(
+                    int(self.winId()),
+                    dark_mode=(self._profile.base_mode == "dark"),
+                    acrylic=False,
+                )
+            except Exception:
+                pass
+
+            self.nav_panel.apply_theme(self._profile.base_mode)
+            self.app_logo_lbl.setPixmap(load_multicolor_svg_pixmap("pdf_lector_logo", size=36))
+            sentinel_pm = load_svg_pixmap("trodai_sentinel", color=p["text_secondary"], size=18)
+            self.trodai_sentinel_lbl.setPixmap(sentinel_pm)
+            self.rib_sentinel_lbl.setPixmap(sentinel_pm)
+
+            self.sidebar_collapse_btn.setIcon(load_svg_icon("sidebar_toggle", color=p["icon_color"], size=14))
+            self.rib_expand_btn.setIcon(load_svg_icon("sidebar_toggle", color=p["icon_color"], size=15))
+            self.open_sidebar_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
+            self.rib_open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
+            for rb, icon_name in zip(self.rib_nav_btns, ("home", "viewer", "palette")):
+                rb.setIcon(load_svg_icon(icon_name, color=p["icon_color"], size=15))
+
+            self.top_studio_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
+            self.top_ai_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=15))
+            self.top_notif_btn.setIcon(load_svg_icon("bell", color=p["icon_color"], size=15))
+            self.top_settings_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=15))
+            self.top_menu_btn.setIcon(load_svg_icon("info", color=p["icon_color"], size=15))
+            self._sync_fullscreen_icon()
+
+            theme_icon = "sun" if self._profile.base_mode == "dark" else "moon"
+            theme_tip = t(
+                "topbar.toggle_light" if self._profile.base_mode == "dark" else "topbar.toggle_dark",
+                self._profile.language,
             )
-        except Exception:
-            pass
+            self.top_theme_btn.setIcon(load_svg_icon(theme_icon, color=p["icon_color"], size=16))
+            self.top_theme_btn.setToolTip(theme_tip)
+            self.privacy_tag.apply_theme(self._profile.base_mode)
+            self._apply_update_banner_theme()
+            if self._ai_panel is not None and shiboken6.isValid(self._ai_panel):
+                self._ai_panel.apply_theme(self._profile.base_mode)
+            if self._active_tool_workspace is not None and shiboken6.isValid(self._active_tool_workspace):
+                self._active_tool_workspace.apply_theme(self._profile.base_mode)
 
-        self.nav_panel.apply_theme(self._profile.base_mode)
         self.nav_panel.set_animations_enabled(self._profile.motion_level != "static")
-
-        self.app_logo_lbl.setPixmap(load_multicolor_svg_pixmap("pdf_lector_logo", size=38))
-        self.trodai_sentinel_lbl.setPixmap(
-            load_svg_pixmap("trodai_sentinel", color=p["text_secondary"], size=18)
-        )
-
-        self.open_sidebar_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
-        self.top_studio_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
-        self.top_ai_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=15))
-        self.top_notif_btn.setIcon(load_svg_icon("bell", color=p["icon_color"], size=15))
-        self.top_menu_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=15))
-        self._sync_fullscreen_icon()
-
-        theme_icon = "sun" if self._profile.base_mode == "dark" else "moon"
-        theme_tip = t(
-            "topbar.toggle_light" if self._profile.base_mode == "dark" else "topbar.toggle_dark",
-            self._profile.language,
-        )
-        self.top_theme_btn.setIcon(load_svg_icon(theme_icon, color=p["icon_color"], size=16))
-        self.top_theme_btn.setToolTip(theme_tip)
-        self.privacy_tag.apply_theme(self._profile.base_mode)
-        self._apply_update_banner_theme()
-
         self.hub_view.apply_profile(self._profile)
         self.viewer_view.apply_profile(self._profile)
         self.studio_view.sync_from_profile(self._profile)
 
         if save and self._persist_profile:
-            save_theme_profile(self._profile)
+            self._profile_save_timer.start()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -743,6 +950,9 @@ class MainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event) -> None:
+        if self._profile_save_timer.isActive():
+            self._profile_save_timer.stop()
+            self._flush_profile_save()
         self.hub_view.cleanup()
         self.viewer_view.cleanup()
         self.studio_view.cleanup()

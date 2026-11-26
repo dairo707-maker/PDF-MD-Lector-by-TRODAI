@@ -1,4 +1,4 @@
-"""PySide6 Ask Document side panel (local BM25 + consent-gated BYOK + DPAPI keys + MCP)."""
+"""PySide6 Ask Document side panel (modern bottom-input chat UX, per-document history, export, DPAPI BYOK)."""
 
 from __future__ import annotations
 
@@ -8,19 +8,30 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
+    QPushButton,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 import shiboken6
 
+from ..core.ai_chat_history import (
+    AiChatHistoryStore,
+    ChatMessage,
+    format_chat_timestamp,
+    local_chat_timestamp,
+)
 from ..core.ai_rag import (
     DocumentRagIndex,
     RagAnswer,
@@ -30,75 +41,111 @@ from ..core.ai_rag import (
     save_byok_key,
 )
 from ..core.path_guard import validate_local_any_doc
-from ..theme.palette import get_palette
+from ..theme.palette import MONO_FONT_FAMILY, UI_FONT_FAMILY, get_palette
 from .svg_icons import load_svg_icon, load_svg_pixmap
 from .widgets import AdaptiveButton, FlowLayout, StatusTag
 
 _AI_TEXTS: dict[str, dict[str, str]] = {
     "es": {
         "title": "Preguntar al documento",
-        "close": "Cerrar",
-        "provider": "Motor IA",
+        "close": "Cerrar panel",
+        "provider": "Motor",
         "consent": "Autorizar envio de fragmentos al proveedor externo (BYOK)",
         "key_placeholder": "Clave API BYOK (cifrada con Windows DPAPI)",
         "endpoint_placeholder": "Endpoint opcional (ej. http://127.0.0.1:11434/api/chat)",
         "save_key": "Guardar clave",
         "clear_key": "Borrar clave",
-        "question_placeholder": "Escribe una pregunta sobre el PDF o Markdown abierto...",
-        "ask": "Preguntar",
+        "question_placeholder": "Escribe una pregunta sobre el documento...",
+        "ask": "Enviar",
         "tag_local": "BM25 LOCAL",
         "tag_byok": "BYOK",
         "no_doc": "Abre primero un documento PDF o Markdown local valido.",
-        "asking": "Consultando...",
+        "asking": "Analizando documento...",
         "key_saved": "Clave cifrada con DPAPI.",
         "key_cleared": "Clave eliminada.",
+        "clear_chat": "Borrar historial del documento",
+        "clear_confirm": "Borrar todo el historial de conversacion guardado para este documento?",
+        "chat_cleared": "Historial del documento borrado.",
+        "export_chat": "Exportar conversacion",
+        "exported_ok": "Chat exportado en {name}",
+        "empty_chat": "Haz una pregunta sobre este PDF o Markdown. El historial se guarda localmente por documento.",
+        "user_label": "Tu",
+        "ai_label": "Asistente IA",
+        "citations_hdr": "Referencias en el documento",
+        "no_active_doc": "Sin documento activo",
     },
     "en": {
         "title": "Ask Document",
-        "close": "Close",
-        "provider": "AI Engine",
+        "close": "Close panel",
+        "provider": "Engine",
         "consent": "Allow sending document excerpts to external BYOK provider",
         "key_placeholder": "BYOK API Key (encrypted with Windows DPAPI)",
         "endpoint_placeholder": "Optional endpoint URL",
         "save_key": "Save key",
         "clear_key": "Clear key",
-        "question_placeholder": "Ask a question about the open PDF or Markdown...",
-        "ask": "Ask",
+        "question_placeholder": "Write a question about the document...",
+        "ask": "Send",
         "tag_local": "LOCAL BM25",
         "tag_byok": "BYOK",
         "no_doc": "Open a valid local PDF or Markdown document first.",
-        "asking": "Querying...",
+        "asking": "Analyzing document...",
         "key_saved": "Key encrypted via DPAPI.",
         "key_cleared": "Key removed.",
+        "clear_chat": "Clear document history",
+        "clear_confirm": "Delete all saved chat history for this document?",
+        "chat_cleared": "Document history cleared.",
+        "export_chat": "Export conversation",
+        "exported_ok": "Chat exported to {name}",
+        "empty_chat": "Ask anything about this PDF or Markdown. History is saved locally per document.",
+        "user_label": "You",
+        "ai_label": "AI Assistant",
+        "citations_hdr": "Document references",
+        "no_active_doc": "No active document",
     },
     "pt": {
         "title": "Perguntar ao documento",
-        "close": "Fechar",
-        "provider": "Motor IA",
+        "close": "Fechar painel",
+        "provider": "Motor",
         "consent": "Autorizar envio de trechos ao provedor externo (BYOK)",
         "key_placeholder": "Chave API BYOK (criptografada com Windows DPAPI)",
         "endpoint_placeholder": "Endpoint opcional",
         "save_key": "Salvar chave",
         "clear_key": "Limpar chave",
-        "question_placeholder": "Pergunte sobre o PDF ou Markdown aberto...",
-        "ask": "Perguntar",
+        "question_placeholder": "Escreva uma pergunta sobre o documento...",
+        "ask": "Enviar",
         "tag_local": "BM25 LOCAL",
         "tag_byok": "BYOK",
         "no_doc": "Abra um documento PDF ou Markdown local valido primeiro.",
-        "asking": "Consultando...",
+        "asking": "Analisando documento...",
         "key_saved": "Chave protegida com DPAPI.",
         "key_cleared": "Chave removida.",
+        "clear_chat": "Limpar historico do documento",
+        "clear_confirm": "Excluir todo o historico salvo para este documento?",
+        "chat_cleared": "Historico do documento limpo.",
+        "export_chat": "Exportar conversa",
+        "exported_ok": "Chat exportado em {name}",
+        "empty_chat": "Faca uma pergunta sobre este PDF ou Markdown. O historico fica salvo localmente por arquivo.",
+        "user_label": "Voce",
+        "ai_label": "Assistente IA",
+        "citations_hdr": "Referencias no documento",
+        "no_active_doc": "Nenhum documento ativo",
     },
 }
 
 
-def _tr(key: str, lang: str) -> str:
+def _tr(key: str, lang: str, **kwargs: object) -> str:
     lang_code = lang if lang in ("es", "en", "pt") else "es"
-    return _AI_TEXTS[lang_code].get(key, key)
+    tmpl = _AI_TEXTS[lang_code].get(key, _AI_TEXTS["es"].get(key, key))
+    if kwargs:
+        try:
+            return tmpl.format(**kwargs)
+        except Exception:
+            return tmpl
+    return tmpl
 
 
 class _AskSignals(QObject):
-    finished = Signal(object)
+    finished = Signal(object, object, str)
 
 
 class _AskWorker(QRunnable):
@@ -147,11 +194,11 @@ class _AskWorker(QRunnable):
                 error=str(exc),
                 used_local_only=True,
             )
-        self.signals.finished.emit(ans)
+        self.signals.finished.emit(ans, self._doc_path, self._question)
 
 
 class AskDocumentPanel(QWidget):
-    """Collapsible AI Q&A side panel powered by local BM25 and consent-gated BYOK."""
+    """Collapsible AI Q&A side panel with modern bottom composer, timestamps, and per-document history."""
 
     close_requested = Signal()
     citation_clicked = Signal(int, str)
@@ -162,46 +209,71 @@ class AskDocumentPanel(QWidget):
         *,
         mode: str = "dark",
         lang: str = "es",
+        history_store: AiChatHistoryStore | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("AskDocumentPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setMinimumWidth(280)
+        self.setMinimumWidth(310)
         self._get_active_doc = get_active_document_callback
-        self._mode = mode
-        self._lang = lang
+        self._mode = "light" if mode == "light" else "dark"
+        self._lang = lang if lang in ("es", "en", "pt") else "es"
+        self._history_store = history_store or AiChatHistoryStore()
+        self._active_doc_path: Path | None = None
+        self._messages: list[ChatMessage] = []
         self._pool = QThreadPool.globalInstance()
         self._active_workers: list[_AskWorker] = []
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        # Header
-        hdr = QHBoxLayout()
+        # Top Header Frame (crisp contrast in both Dark and Light modes)
+        self._header_frame = QFrame(self)
+        self._header_frame.setObjectName("AskHeader")
+        hdr = QHBoxLayout(self._header_frame)
+        hdr.setContentsMargins(8, 6, 8, 6)
         hdr.setSpacing(6)
-        self._icon_lbl = QLabel(self)
+
+        self._icon_lbl = QLabel(self._header_frame)
+        self._icon_lbl.setFixedSize(16, 16)
         hdr.addWidget(self._icon_lbl)
 
-        self.title_lbl = QLabel(_tr("title", lang), self)
-        self.title_lbl.setProperty("role", "SectionTitle")
+        self.title_lbl = QLabel(_tr("title", self._lang), self._header_frame)
+        self.title_lbl.setFont(QFont(UI_FONT_FAMILY, 11, QFont.Weight.Bold))
         hdr.addWidget(self.title_lbl, 1)
 
-        self.mode_tag = StatusTag(_tr("tag_local", lang), tone="ok", parent=self)
+        self.mode_tag = StatusTag(_tr("tag_local", self._lang), tone="ok", parent=self._header_frame)
         hdr.addWidget(self.mode_tag)
 
-        self.close_btn = AdaptiveButton("", self, role="GhostAction")
-        self.close_btn.setToolTip(_tr("close", lang))
-        self.close_btn.setFixedWidth(28)
+        self.export_chat_btn = QPushButton("", self._header_frame)
+        self.export_chat_btn.setObjectName("AskHeaderBtn")
+        self.export_chat_btn.setFixedSize(26, 26)
+        self.export_chat_btn.setToolTip(_tr("export_chat", self._lang))
+        self.export_chat_btn.clicked.connect(lambda: self.export_current_chat())
+        hdr.addWidget(self.export_chat_btn)
+
+        self.clear_chat_btn = QPushButton("", self._header_frame)
+        self.clear_chat_btn.setObjectName("AskHeaderBtn")
+        self.clear_chat_btn.setFixedSize(26, 26)
+        self.clear_chat_btn.setToolTip(_tr("clear_chat", self._lang))
+        self.clear_chat_btn.clicked.connect(lambda: self.clear_current_chat())
+        hdr.addWidget(self.clear_chat_btn)
+
+        self.close_btn = QPushButton("", self._header_frame)
+        self.close_btn.setObjectName("AskHeaderBtn")
+        self.close_btn.setFixedSize(26, 26)
+        self.close_btn.setToolTip(_tr("close", self._lang))
         self.close_btn.clicked.connect(self.close_requested.emit)
         hdr.addWidget(self.close_btn)
-        root.addLayout(hdr)
+        root.addWidget(self._header_frame)
 
         # Provider + endpoint + DPAPI key controls
         prov_row = QHBoxLayout()
         prov_row.setSpacing(6)
-        self.provider_lbl = QLabel(_tr("provider", lang), self)
+        self.provider_lbl = QLabel(_tr("provider", self._lang), self)
+        self.provider_lbl.setProperty("tone", "secondary")
         prov_row.addWidget(self.provider_lbl)
 
         self.provider_combo = QComboBox(self)
@@ -222,59 +294,97 @@ class AskDocumentPanel(QWidget):
         byok_layout.setSpacing(6)
 
         self.endpoint_edit = QLineEdit(self._byok_box)
-        self.endpoint_edit.setPlaceholderText(_tr("endpoint_placeholder", lang))
+        self.endpoint_edit.setPlaceholderText(_tr("endpoint_placeholder", self._lang))
         byok_layout.addWidget(self.endpoint_edit)
 
         self.api_key_edit = QLineEdit(self._byok_box)
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setPlaceholderText(_tr("key_placeholder", lang))
+        self.api_key_edit.setPlaceholderText(_tr("key_placeholder", self._lang))
         byok_layout.addWidget(self.api_key_edit)
 
         key_btns = FlowLayout(h_spacing=6, v_spacing=6)
-        self.save_key_btn = AdaptiveButton(_tr("save_key", lang), self._byok_box, role="GhostAction")
+        self.save_key_btn = AdaptiveButton(_tr("save_key", self._lang), self._byok_box, role="GhostAction")
         self.save_key_btn.clicked.connect(self._on_save_key)
         key_btns.addWidget(self.save_key_btn)
 
-        self.clear_key_btn = AdaptiveButton(_tr("clear_key", lang), self._byok_box, role="GhostAction")
+        self.clear_key_btn = AdaptiveButton(_tr("clear_key", self._lang), self._byok_box, role="GhostAction")
         self.clear_key_btn.clicked.connect(self._on_clear_key)
         key_btns.addWidget(self.clear_key_btn)
         byok_layout.addLayout(key_btns)
 
-        self.consent_checkbox = QCheckBox(_tr("consent", lang), self._byok_box)
+        self.consent_checkbox = QCheckBox(_tr("consent", self._lang), self._byok_box)
         self.consent_checkbox.setChecked(False)
         byok_layout.addWidget(self.consent_checkbox)
 
         root.addWidget(self._byok_box)
 
-        # Question bar
-        q_row = QHBoxLayout()
-        q_row.setSpacing(6)
-        self.question_edit = QLineEdit(self)
-        self.question_edit.setPlaceholderText(_tr("question_placeholder", lang))
-        self.question_edit.returnPressed.connect(self.ask_current_question)
-        q_row.addWidget(self.question_edit, 1)
+        # Active Document Indicator
+        self.doc_badge_lbl = QLabel(_tr("no_active_doc", self._lang), self)
+        self.doc_badge_lbl.setFont(QFont(MONO_FONT_FAMILY, 8))
+        self.doc_badge_lbl.setProperty("mono", "true")
+        self.doc_badge_lbl.setProperty("tone", "muted")
+        self.doc_badge_lbl.setWordWrap(True)
+        root.addWidget(self.doc_badge_lbl)
 
-        self.ask_btn = AdaptiveButton(_tr("ask", lang), self, role="PrimaryAction")
-        self.ask_btn.clicked.connect(self.ask_current_question)
-        q_row.addWidget(self.ask_btn)
-        root.addLayout(q_row)
+        # Conversation Thread ABOVE (modern chat layout)
+        self.answer_browser = QTextBrowser(self)
+        self.answer_browser.setObjectName("AskChatBrowser")
+        self.answer_browser.setOpenExternalLinks(False)
+        self.answer_browser.anchorClicked.connect(self._on_anchor_clicked)
+        root.addWidget(self.answer_browser, 1)
 
-        # Status & Output
+        # Subtle status line
         self.status_lbl = QLabel("", self)
         self.status_lbl.setProperty("tone", "secondary")
         self.status_lbl.setWordWrap(True)
         root.addWidget(self.status_lbl)
 
-        self.answer_browser = QTextBrowser(self)
-        self.answer_browser.setOpenExternalLinks(False)
-        self.answer_browser.anchorClicked.connect(self._on_anchor_clicked)
-        root.addWidget(self.answer_browser, 1)
+        # Composer Bar BELOW
+        self._composer_frame = QFrame(self)
+        self._composer_frame.setObjectName("AskComposerBox")
+        q_row = QHBoxLayout(self._composer_frame)
+        q_row.setContentsMargins(6, 6, 6, 6)
+        q_row.setSpacing(6)
+
+        self.question_edit = QLineEdit(self._composer_frame)
+        self.question_edit.setPlaceholderText(_tr("question_placeholder", self._lang))
+        self.question_edit.returnPressed.connect(self.ask_current_question)
+        q_row.addWidget(self.question_edit, 1)
+
+        self.ask_btn = AdaptiveButton("", self._composer_frame, role="PrimaryAction")
+        self.ask_btn.setFixedWidth(36)
+        self.ask_btn.setToolTip(_tr("ask", self._lang))
+        self.ask_btn.clicked.connect(self.ask_current_question)
+        q_row.addWidget(self.ask_btn)
+        root.addWidget(self._composer_frame)
 
         self._on_provider_changed()
-        self.apply_theme(mode)
+        self.refresh_active_document()
+        self.apply_theme(self._mode)
 
     def current_provider(self) -> str:
         return str(self.provider_combo.currentData() or "local_bm25")
+
+    def messages(self) -> list[ChatMessage]:
+        return list(self._messages)
+
+    def refresh_active_document(self) -> None:
+        if self._get_active_doc is None:
+            return
+        doc_path, _ = self._get_active_doc()
+        self.set_active_document(doc_path)
+
+    def set_active_document(self, doc_path: Path | None) -> None:
+        self._active_doc_path = Path(doc_path).resolve() if doc_path is not None else None
+        if self._active_doc_path is not None:
+            self.doc_badge_lbl.setText(self._active_doc_path.name)
+            self.doc_badge_lbl.setToolTip(str(self._active_doc_path))
+            self._messages = self._history_store.load_history(self._active_doc_path)
+        else:
+            self.doc_badge_lbl.setText(_tr("no_active_doc", self._lang))
+            self.doc_badge_lbl.setToolTip("")
+            self._messages = []
+        self._render_conversation_html()
 
     def _on_provider_changed(self) -> None:
         prov = self.current_provider()
@@ -315,6 +425,21 @@ class AskDocumentPanel(QWidget):
             self.status_lbl.setText(_tr("no_doc", self._lang))
             return
 
+        if doc_path is not None and (self._active_doc_path is None or doc_path.resolve() != self._active_doc_path):
+            self.set_active_document(doc_path)
+
+        user_msg = ChatMessage(
+            role="user",
+            text=question,
+            timestamp=local_chat_timestamp(),
+            provider=self.current_provider(),
+        )
+        self._messages.append(user_msg)
+        if self._active_doc_path is not None:
+            self._history_store.save_history(self._active_doc_path, self._messages)
+        self._render_conversation_html()
+
+        self.question_edit.clear()
         self.ask_btn.setEnabled(False)
         self.status_lbl.setText(_tr("asking", self._lang))
 
@@ -330,7 +455,7 @@ class AskDocumentPanel(QWidget):
         worker.signals.finished.connect(self._on_answer_ready, Qt.ConnectionType.QueuedConnection)
         self._pool.start(worker)
 
-    def _on_answer_ready(self, ans: Any) -> None:
+    def _on_answer_ready(self, ans: Any, doc_path: Any = None, _question: str = "") -> None:
         if not shiboken6.isValid(self):
             return
         self.ask_btn.setEnabled(True)
@@ -345,20 +470,147 @@ class AskDocumentPanel(QWidget):
         else:
             self.status_lbl.setText(f"OK ({ans.provider})")
 
-        html_parts = [f"<p>{escape(ans.answer_text).replace(chr(10), '<br/>')}</p>"]
-        if ans.citations:
-            html_parts.append("<hr/><div><b>Citations:</b></div><ul>")
-            for idx, cit in enumerate(ans.citations):
-                if cit.page_number is not None:
-                    label = f"p. {cit.page_number}"
-                    href = f"trodai://page/{cit.page_number}"
-                else:
-                    label = cit.section or Path(cit.source_path).name
-                    href = f"trodai://section/{idx}"
-                snippet = escape(" ".join(cit.text.split())[:180])
-                html_parts.append(f'<li><a href="{href}">[{escape(label)}]</a> {snippet}</li>')
-            html_parts.append("</ul>")
-        self.answer_browser.setHtml("".join(html_parts))
+        cits_payload: list[dict[str, object]] = []
+        for idx, cit in enumerate(ans.citations):
+            if cit.page_number is not None:
+                label = f"p. {cit.page_number}"
+                href = f"trodai://page/{cit.page_number}"
+            else:
+                label = cit.section or Path(cit.source_path).name
+                href = f"trodai://section/{idx}"
+            snippet = " ".join(cit.text.split())[:180]
+            cits_payload.append({"label": label, "href": href, "snippet": snippet})
+
+        reply_msg = ChatMessage(
+            role="assistant",
+            text=ans.answer_text,
+            timestamp=local_chat_timestamp(),
+            provider=ans.provider,
+            citations=cits_payload,
+        )
+        target_doc = Path(doc_path).resolve() if doc_path is not None else self._active_doc_path
+        if target_doc is not None and self._active_doc_path is not None and target_doc == self._active_doc_path:
+            self._messages.append(reply_msg)
+            self._history_store.save_history(target_doc, self._messages)
+            self._render_conversation_html()
+        elif target_doc is not None:
+            self._history_store.append_message(target_doc, reply_msg)
+        else:
+            self._messages.append(reply_msg)
+            self._render_conversation_html()
+
+    def _render_conversation_html(self) -> None:
+        p = get_palette(self._mode)
+        if not self._messages:
+            self.answer_browser.setHtml(
+                f"<div style='padding: 18px 8px; color: {p['text_muted']}; font-size: 12px; line-height: 1.45;'>"
+                f"{escape(_tr('empty_chat', self._lang))}</div>"
+            )
+            return
+
+        link_color = p["motion_cyan"]
+        user_bg = p["bg_selected_hex"]
+        ai_bg = p["bg_glass_elevated"]
+        bd_color = p["border_strong"]
+        fg = p["text_primary"]
+        sec = p["text_secondary"]
+        muted = p["text_muted"]
+
+        blocks: list[str] = []
+        for msg in self._messages:
+            ts = escape(format_chat_timestamp(msg.timestamp))
+            body_html = escape(msg.text).replace("\n", "<br/>")
+            if msg.role == "user":
+                sender = escape(_tr("user_label", self._lang))
+                blocks.append(
+                    f"<table width='100%' cellspacing='0' cellpadding='0' style='margin-bottom: 10px;'>"
+                    f"<tr><td align='right'>"
+                    f"<div style='background-color: {user_bg}; border: 1px solid {bd_color}; padding: 8px 10px; "
+                    f"text-align: left; color: {fg}; font-size: 12px;'>"
+                    f"<div style='font-size: 10px; color: {muted}; margin-bottom: 4px;'>"
+                    f"<b style='color: {fg};'>{sender}</b> &middot; {ts}</div>"
+                    f"<div style='color: {fg}; line-height: 1.4;'>{body_html}</div>"
+                    f"</div></td></tr></table>"
+                )
+            else:
+                prov_tag = f" ({escape(msg.provider)})" if msg.provider else ""
+                sender = escape(_tr("ai_label", self._lang)) + prov_tag
+                cit_html = ""
+                if msg.citations:
+                    items = []
+                    for cit in msg.citations:
+                        href = escape(str(cit.get("href") or "#"))
+                        label = escape(str(cit.get("label") or "ref"))
+                        snip = escape(str(cit.get("snippet") or ""))
+                        items.append(
+                            f"<li style='margin-bottom: 3px;'>"
+                            f"<a href='{href}' style='color: {link_color}; font-weight: bold; text-decoration: none;'>[{label}]</a> "
+                            f"<span style='color: {sec};'>{snip}</span></li>"
+                        )
+                    cit_html = (
+                        f"<div style='margin-top: 8px; padding-top: 6px; border-top: 1px solid {bd_color}; "
+                        f"font-size: 11px; color: {sec};'>"
+                        f"<b>{escape(_tr('citations_hdr', self._lang))}:</b>"
+                        f"<ul style='margin: 4px 0 0 16px; padding: 0;'>{''.join(items)}</ul></div>"
+                    )
+                blocks.append(
+                    f"<table width='100%' cellspacing='0' cellpadding='0' style='margin-bottom: 10px;'>"
+                    f"<tr><td align='left'>"
+                    f"<div style='background-color: {ai_bg}; border: 1px solid {bd_color}; padding: 8px 10px; "
+                    f"color: {fg}; font-size: 12px;'>"
+                    f"<div style='font-size: 10px; color: {muted}; margin-bottom: 4px;'>"
+                    f"<b style='color: {fg};'>{sender}</b> &middot; {ts}</div>"
+                    f"<div style='color: {fg}; line-height: 1.45;'>{body_html}</div>"
+                    f"{cit_html}"
+                    f"</div></td></tr></table>"
+                )
+
+        self.answer_browser.setHtml("".join(blocks))
+        sb = self.answer_browser.verticalScrollBar()
+        if sb is not None:
+            sb.setValue(sb.maximum())
+
+    def clear_current_chat(self, *, confirm: bool | None = None) -> bool:
+        need_confirm = (QApplication.platformName() != "offscreen") if confirm is None else confirm
+        if need_confirm and self._messages:
+            ans = QMessageBox.question(
+                self,
+                _tr("clear_chat", self._lang),
+                _tr("clear_confirm", self._lang),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return False
+        self._messages.clear()
+        if self._active_doc_path is not None:
+            self._history_store.clear_history(self._active_doc_path)
+        self._render_conversation_html()
+        self.status_lbl.setText(_tr("chat_cleared", self._lang))
+        return True
+
+    def export_current_chat(self, output_path: Path | None = None) -> Path | None:
+        doc = self._active_doc_path
+        if doc is None:
+            self.status_lbl.setText(_tr("no_doc", self._lang))
+            return None
+        if not self._messages:
+            return None
+        target = output_path
+        if target is None:
+            default_name = f"{doc.stem}_chat.md"
+            chosen, _ = QFileDialog.getSaveFileName(
+                self,
+                _tr("export_chat", self._lang),
+                str(doc.parent / default_name),
+                "Markdown (*.md);;Texto plano (*.txt);;JSON (*.json)",
+            )
+            if not chosen:
+                return None
+            target = Path(chosen)
+        out = self._history_store.export_chat(doc, target)
+        self.status_lbl.setText(_tr("exported_ok", self._lang, name=out.name))
+        return out
 
     def _on_anchor_clicked(self, url: Any) -> None:
         raw = url.toString() if hasattr(url, "toString") else str(url)
@@ -372,22 +624,59 @@ class AskDocumentPanel(QWidget):
             self.citation_clicked.emit(-1, raw)
 
     def apply_theme(self, mode: str) -> None:
-        self._mode = mode
-        p = get_palette(mode)
+        self._mode = "light" if mode == "light" else "dark"
+        p = get_palette(self._mode)
         self._icon_lbl.setPixmap(load_svg_pixmap("spark", color=p["icon_color"], size=16))
+        self.export_chat_btn.setIcon(load_svg_icon("export", color=p["icon_color"], size=14))
+        self.clear_chat_btn.setIcon(load_svg_icon("trash", color=p["icon_color"], size=14))
         self.close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=14))
-        self.mode_tag.apply_theme(mode)
+        self.ask_btn.setIcon(load_svg_icon("send", color=p["primary_fg"], size=14))
+        self.mode_tag.apply_theme(self._mode)
         self.setStyleSheet(
             f"""
             QWidget#AskDocumentPanel {{
                 background-color: {p["bg_sidebar"]};
+                color: {p["text_primary"]};
                 border-left: 1px solid {p["border_hairline"]};
             }}
-            QFrame#ByokConfigBox {{
-                background-color: {p["bg_glass"]};
-                border: 1px solid {p["border_hairline"]};
+            QWidget#AskDocumentPanel QLabel {{
+                color: {p["text_primary"]};
+                background: transparent;
             }}
-            QTextBrowser {{
+            QWidget#AskDocumentPanel QLabel[tone="secondary"] {{
+                color: {p["text_secondary"]};
+            }}
+            QWidget#AskDocumentPanel QLabel[tone="muted"] {{
+                color: {p["text_muted"]};
+            }}
+            QFrame#AskHeader {{
+                background-color: {p["bg_glass"]};
+                border: 1px solid {p["border_strong"]};
+            }}
+            QPushButton#AskHeaderBtn {{
+                background-color: {p["bg_glass_elevated"]};
+                color: {p["text_primary"]};
+                border: 1px solid {p["border_strong"]};
+                padding: 3px;
+            }}
+            QPushButton#AskHeaderBtn:hover {{
+                background-color: {p["bg_hover"]};
+                border-color: {p["border_selected"]};
+            }}
+            QFrame#ByokConfigBox, QFrame#AskComposerBox {{
+                background-color: {p["bg_glass"]};
+                border: 1px solid {p["border_strong"]};
+            }}
+            QWidget#AskDocumentPanel QLineEdit,
+            QWidget#AskDocumentPanel QComboBox {{
+                background-color: {p["bg_glass_elevated"]};
+                color: {p["text_primary"]};
+                border: 1px solid {p["border_strong"]};
+            }}
+            QWidget#AskDocumentPanel QCheckBox {{
+                color: {p["text_primary"]};
+            }}
+            QTextBrowser#AskChatBrowser {{
                 background-color: {p["bg_glass"]};
                 color: {p["text_primary"]};
                 border: 1px solid {p["border_hairline"]};
@@ -395,17 +684,23 @@ class AskDocumentPanel(QWidget):
             }}
             """
         )
+        self._render_conversation_html()
 
     def retranslate(self, lang: str) -> None:
-        self._lang = lang
-        self.title_lbl.setText(_tr("title", lang))
-        self.close_btn.setToolTip(_tr("close", lang))
-        self.provider_lbl.setText(_tr("provider", lang))
-        self.consent_checkbox.setText(_tr("consent", lang))
-        self.api_key_edit.setPlaceholderText(_tr("key_placeholder", lang))
-        self.endpoint_edit.setPlaceholderText(_tr("endpoint_placeholder", lang))
-        self.save_key_btn.setText(_tr("save_key", lang))
-        self.clear_key_btn.setText(_tr("clear_key", lang))
-        self.question_edit.setPlaceholderText(_tr("question_placeholder", lang))
-        self.ask_btn.setText(_tr("ask", lang))
+        self._lang = lang if lang in ("es", "en", "pt") else "es"
+        self.title_lbl.setText(_tr("title", self._lang))
+        self.close_btn.setToolTip(_tr("close", self._lang))
+        self.export_chat_btn.setToolTip(_tr("export_chat", self._lang))
+        self.clear_chat_btn.setToolTip(_tr("clear_chat", self._lang))
+        self.provider_lbl.setText(_tr("provider", self._lang))
+        self.consent_checkbox.setText(_tr("consent", self._lang))
+        self.api_key_edit.setPlaceholderText(_tr("key_placeholder", self._lang))
+        self.endpoint_edit.setPlaceholderText(_tr("endpoint_placeholder", self._lang))
+        self.save_key_btn.setText(_tr("save_key", self._lang))
+        self.clear_key_btn.setText(_tr("clear_key", self._lang))
+        self.question_edit.setPlaceholderText(_tr("question_placeholder", self._lang))
+        self.ask_btn.setToolTip(_tr("ask", self._lang))
+        if self._active_doc_path is None:
+            self.doc_badge_lbl.setText(_tr("no_active_doc", self._lang))
         self._on_provider_changed()
+        self._render_conversation_html()

@@ -37,6 +37,25 @@ QT_EXCLUDES: tuple[str, ...] = (
     "PySide6.QtQml",
 )
 
+HIDDEN_SUBMODULES: tuple[str, ...] = (
+    "pdf_lector.core.tools.organize",
+    "pdf_lector.core.tools.optimize",
+    "pdf_lector.core.tools.security",
+    "pdf_lector.core.tools.compare",
+    "pdf_lector.core.tools.convert",
+    "pdf_lector.core.tools.create",
+    "pdf_lector.core.tools.invoices",
+    "pdf_lector.ui.tool_workspace",
+    "pdf_lector.ui.ai_panel",
+    "pdf_lector.ui.invoice_dialog",
+    "pdf_lector.ui.preferences_dialog",
+    "pdf_lector.ui.notifications_drawer",
+    "pdf_lector.ui.diagnostics_dialog",
+    "pdf_lector.ui.support_dialog",
+    "pdf_lector.ui.tour_dialog",
+    "pdf_lector.ui.about_updater_dialog",
+)
+
 
 def read_version() -> str:
     """Read application version from VERSION file, falling back to 0.1.0."""
@@ -317,6 +336,8 @@ def build_pyinstaller_args(
         str(work_dir),
         "--paths",
         str(ROOT / "src"),
+        "--collect-submodules",
+        "pdf_lector",
         "--add-data",
         f"{ROOT / 'VERSION'};.",
         "--add-data",
@@ -324,6 +345,8 @@ def build_pyinstaller_args(
         "--add-data",
         f"{ASSETS / 'icons'};assets/icons",
     ]
+    for hidden_mod in HIDDEN_SUBMODULES:
+        args.extend(["--hidden-import", hidden_mod])
     browser_ext = ROOT / "browser-extension"
     if browser_ext.is_dir():
         args.extend(["--add-data", f"{browser_ext};browser-extension"])
@@ -381,12 +404,14 @@ def main(argv: list[str] | None = None) -> int:
     work_dir = Path(tempfile.gettempdir()) / f"pdf_lector_pyi_{os.getpid()}"
     entry_script = work_dir / "pyinstaller_entry.py"
 
+    stage_dist = work_dir / "stage_dist"
     pyi_portable_args = build_pyinstaller_args(entry_script, ico_path, work_dir, dist_dir=DIST, bundle_mode="onefile")
     pyi_onedir_args = build_pyinstaller_args(
-        entry_script, ico_path, work_dir, dist_dir=DIST, bundle_mode="onedir", app_name=APP_BUNDLE_NAME
+        entry_script, ico_path, work_dir, dist_dir=stage_dist, bundle_mode="onedir", app_name=APP_BUNDLE_NAME
     )
     portable_exe = DIST / f"{PORTABLE_EXE_NAME}.exe"
-    onedir_exe = DIST / APP_BUNDLE_NAME / f"{APP_BUNDLE_NAME}.exe"
+    onedir_dir = DIST / APP_BUNDLE_NAME
+    onedir_exe = onedir_dir / f"{APP_BUNDLE_NAME}.exe"
     setup_exe = DIST / f"{SETUP_EXE_NAME}.exe"
     iscc = find_iscc()
 
@@ -401,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     DIST.mkdir(parents=True, exist_ok=True)
     BUILD.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
+    stage_dist.mkdir(parents=True, exist_ok=True)
     generate_installer_wizard_images()
     entry_script.write_text(
         "from pdf_lector.app import main\nif __name__ == '__main__':\n    raise SystemExit(main())\n",
@@ -411,11 +437,15 @@ def main(argv: list[str] | None = None) -> int:
     if not args.setup_only:
         run_pyinstaller(pyi_portable_args)
         maybe_sign_binary(portable_exe)
-        if portable_exe.exists():
-            artifacts.append(portable_exe)
+    if portable_exe.exists():
+        artifacts.append(portable_exe)
 
     if not args.portable_only:
         run_pyinstaller(pyi_onedir_args)
+        staged_bundle = stage_dist / APP_BUNDLE_NAME
+        if staged_bundle.is_dir():
+            shutil.rmtree(onedir_dir, ignore_errors=True)
+            shutil.copytree(staged_bundle, onedir_dir, dirs_exist_ok=True)
         maybe_sign_binary(onedir_exe)
         if iscc is not None:
             iss_file = ROOT / "packaging" / "installer.iss"

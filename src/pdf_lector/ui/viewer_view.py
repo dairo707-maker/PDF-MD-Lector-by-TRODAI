@@ -1,4 +1,4 @@
-"""Multi-tab PDF/Markdown viewer with 3-mode rail, interactive PdfCanvas, 3-mode MD tab, and Kindle dictionary."""
+"""Multi-tab PDF/Markdown Adobe-style viewer with continuous scroll, independent/detachable rails, and right tool rail."""
 
 from __future__ import annotations
 
@@ -41,9 +41,9 @@ from ..theme.palette import UI_FONT_FAMILY, get_palette
 from ..theme.theme_profile import ThemeProfile
 from .dictionary_panel import DictionaryPanel
 from .md_tab_page import MarkdownTabPage
-from .pdf_canvas import CLASSIC_HIGHLIGHT_PALETTE, PdfCanvas
+from .pdf_canvas import CLASSIC_HIGHLIGHT_PALETTE, PdfCanvas, SharedAnnotationState
 from .svg_icons import load_svg_icon
-from .widgets import AdaptiveButton, FlowLayout, SlidingSegmentedControl, StatusTag
+from .widgets import AdaptiveButton, FlowLayout, StatusTag
 
 _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
     "es": {
@@ -57,6 +57,14 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.tool.eraser": "Borrador",
         "viewer.tool.touch_write": "Escribir tactil",
         "viewer.tool.undo": "Deshacer",
+        "viewer.rail.ink_tools": "Tinta y anotacion",
+        "viewer.rail.ai": "Preguntar IA",
+        "viewer.rail.settings": "Configuracion",
+        "viewer.rail.detach": "Desacoplar panel",
+        "viewer.rail.dock": "Acoplar panel",
+        "viewer.rail.close": "Cerrar panel",
+        "viewer.rail.thumbs_title": "Miniaturas",
+        "viewer.rail.toc_title": "Indice y marcadores",
         "dict.floating_title": "Diccionario · PDF/MD Lector",
     },
     "en": {
@@ -70,6 +78,14 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.tool.eraser": "Eraser",
         "viewer.tool.touch_write": "Touch writing",
         "viewer.tool.undo": "Undo",
+        "viewer.rail.ink_tools": "Ink & Drawing",
+        "viewer.rail.ai": "Ask AI",
+        "viewer.rail.settings": "Settings",
+        "viewer.rail.detach": "Detach panel",
+        "viewer.rail.dock": "Dock panel",
+        "viewer.rail.close": "Close panel",
+        "viewer.rail.thumbs_title": "Thumbnails",
+        "viewer.rail.toc_title": "Index & Bookmarks",
         "dict.floating_title": "Dictionary · PDF/MD Lector",
     },
     "pt": {
@@ -83,6 +99,14 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.tool.eraser": "Borracha",
         "viewer.tool.touch_write": "Escrita tatil",
         "viewer.tool.undo": "Desfazer",
+        "viewer.rail.ink_tools": "Tinta e desenho",
+        "viewer.rail.ai": "Perguntar IA",
+        "viewer.rail.settings": "Configuracoes",
+        "viewer.rail.detach": "Desacoplar painel",
+        "viewer.rail.dock": "Acoplar painel",
+        "viewer.rail.close": "Fechar painel",
+        "viewer.rail.thumbs_title": "Miniaturas",
+        "viewer.rail.toc_title": "Indice e marcadores",
         "dict.floating_title": "Dicionario · PDF/MD Lector",
     },
 }
@@ -101,28 +125,28 @@ def _tv(key: str, lang: str = "es", **kwargs: object) -> str:
         return tmpl
 
 
-class _FloatingDictionaryWindow(QWidget):
-    """Reusable non-deleting floating container for the detachable Kindle dictionary panel."""
+class _FloatingPaneWindow(QWidget):
+    """Reusable non-deleting floating window for detachable viewer panels (Dictionary / Thumbnails / Index)."""
 
     closed_by_user = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, *, width: int = 300, height: int = 480, parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setObjectName("RootCanvas")
-        self.setMinimumSize(280, 380)
-        self.resize(320, 480)
+        self.setMinimumSize(250, 320)
+        self.resize(width, height)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
 
-    def attach_panel(self, panel: DictionaryPanel) -> None:
+    def attach_panel(self, panel: QWidget) -> None:
         if panel.parentWidget() is not self:
             panel.setParent(self)
         if self._layout.indexOf(panel) < 0:
             self._layout.addWidget(panel)
 
-    def detach_panel(self, panel: DictionaryPanel) -> None:
+    def detach_panel(self, panel: QWidget) -> None:
         self._layout.removeWidget(panel)
 
     def apply_theme(self, mode: str) -> None:
@@ -138,11 +162,12 @@ class _FloatingDictionaryWindow(QWidget):
 
 
 class PdfTabPage(QWidget):
-    """Individual PDF tab with 3-mode TOC/Bookmarks/Thumbnails rail and interactive PdfCanvas."""
+    """Individual PDF tab with independent closable/detachable Miniaturas & Índice panes and continuous scroll."""
 
     state_changed = Signal()
     page_words_ready = Signal(list)
     lookup_word_requested = Signal(str)
+    rail_state_changed = Signal()
 
     def __init__(
         self,
@@ -150,6 +175,7 @@ class PdfTabPage(QWidget):
         *,
         bookmarks_store: BookmarksStore,
         guard: MotionPerformanceGuard | None = None,
+        continuous_scroll: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -162,50 +188,68 @@ class PdfTabPage(QWidget):
         self.rotation = 0
         self._lang = "es"
         self._mode = "dark"
-        self._rail_visible = True
-        self._rail_mode = "both"
-        self._active_tasks: set[AsyncPageRenderTask] = set()
+        self._continuous_scroll = bool(continuous_scroll)
+        self._rail_visible = False
+        self._rail_mode = "thumbs"
+        self._thumbs_open = False
+        self._toc_open = False
+        self._thumbs_detached = False
+        self._toc_detached = False
+        self._floating_thumb_win: _FloatingPaneWindow | None = None
+        self._floating_toc_win: _FloatingPaneWindow | None = None
+        self._active_tasks: dict[int, AsyncPageRenderTask] = {}
+        self._rendered_signatures: dict[int, tuple[float, int]] = {}
         self._profile = ThemeProfile()
+        self._shared_ann_store = SharedAnnotationState()
+        self._programmatic_scroll = False
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Collapsible Left Navigation Rail (Thumbnails / TOC+Bookmarks / Both)
+        # Left Navigation Rail (Starts hidden for Adobe-style reading space; holds independent Miniaturas & Índice)
         self.nav_rail = QFrame(self)
         self.nav_rail.setObjectName("ThumbRail")
-        self.nav_rail.setFixedWidth(256)
+        self.nav_rail.setFixedWidth(248)
+        self.nav_rail.setVisible(False)
         rail_layout = QVBoxLayout(self.nav_rail)
-        rail_layout.setContentsMargins(8, 8, 8, 8)
-        rail_layout.setSpacing(8)
-
-        self.rail_mode_switch = SlidingSegmentedControl(self.nav_rail)
-        self.rail_mode_switch.set_options(
-            [
-                ("thumbs", t("viewer.rail.thumbs", self._lang)),
-                ("toc", t("viewer.rail.toc", self._lang)),
-                ("both", t("viewer.rail.both", self._lang)),
-            ]
-        )
-        self.rail_mode_switch.set_current("both", animate=False)
-        self.rail_mode_switch.selection_changed.connect(self.set_rail_mode)
-        rail_layout.addWidget(self.rail_mode_switch)
+        rail_layout.setContentsMargins(6, 6, 6, 6)
+        rail_layout.setSpacing(6)
 
         self.rail_splitter = QSplitter(Qt.Orientation.Vertical, self.nav_rail)
         self.rail_splitter.setHandleWidth(2)
 
-        # TOC + Bookmarks Pane
+        # 1. TOC + Bookmarks Pane (independent header with Detach + Close X)
         self.toc_pane = QWidget(self.rail_splitter)
         self.toc_pane.setObjectName("TransparentHost")
         toc_layout = QVBoxLayout(self.toc_pane)
         toc_layout.setContentsMargins(0, 0, 0, 0)
         toc_layout.setSpacing(6)
 
-        self.toc_hdr_lbl = QLabel("", self.toc_pane)
-        th_f = QFont(UI_FONT_FAMILY, 9)
-        th_f.setWeight(QFont.Weight.Bold)
+        toc_hdr_bar = QFrame(self.toc_pane)
+        toc_hdr_bar.setObjectName("RailPaneHeader")
+        th_row = QHBoxLayout(toc_hdr_bar)
+        th_row.setContentsMargins(6, 4, 4, 4)
+        th_row.setSpacing(4)
+        self.toc_hdr_lbl = QLabel("", toc_hdr_bar)
+        th_f = QFont(UI_FONT_FAMILY, 9, QFont.Weight.Bold)
         self.toc_hdr_lbl.setFont(th_f)
-        toc_layout.addWidget(self.toc_hdr_lbl)
+        th_row.addWidget(self.toc_hdr_lbl, 1)
+
+        self.toc_detach_btn = QPushButton("", toc_hdr_bar)
+        self.toc_detach_btn.setProperty("role", "GhostAction")
+        self.toc_detach_btn.setFixedSize(22, 22)
+        self.toc_detach_btn.setStyleSheet("padding: 2px;")
+        self.toc_detach_btn.clicked.connect(lambda: QTimer.singleShot(0, self._toggle_toc_detach))
+        th_row.addWidget(self.toc_detach_btn)
+
+        self.toc_close_btn = QPushButton("", toc_hdr_bar)
+        self.toc_close_btn.setProperty("role", "GhostAction")
+        self.toc_close_btn.setFixedSize(22, 22)
+        self.toc_close_btn.setStyleSheet("padding: 2px;")
+        self.toc_close_btn.clicked.connect(lambda: QTimer.singleShot(0, lambda: self.set_toc_open(False)))
+        th_row.addWidget(self.toc_close_btn)
+        toc_layout.addWidget(toc_hdr_bar)
 
         self.toc_tree = QTreeWidget(self.toc_pane)
         self.toc_tree.setHeaderHidden(True)
@@ -240,21 +284,51 @@ class PdfTabPage(QWidget):
         self.bm_list = QListWidget(self.toc_pane)
         self.bm_list.itemClicked.connect(self._on_bookmark_clicked)
         toc_layout.addWidget(self.bm_list, 2)
-
         self.rail_splitter.addWidget(self.toc_pane)
 
-        # Thumbnails List
-        self.thumb_list = QListWidget(self.rail_splitter)
+        # 2. Thumbnails Pane (independent header with Detach + Close X)
+        self.thumb_pane = QWidget(self.rail_splitter)
+        self.thumb_pane.setObjectName("TransparentHost")
+        thumb_layout = QVBoxLayout(self.thumb_pane)
+        thumb_layout.setContentsMargins(0, 0, 0, 0)
+        thumb_layout.setSpacing(6)
+
+        thumb_hdr_bar = QFrame(self.thumb_pane)
+        thumb_hdr_bar.setObjectName("RailPaneHeader")
+        tb_row = QHBoxLayout(thumb_hdr_bar)
+        tb_row.setContentsMargins(6, 4, 4, 4)
+        tb_row.setSpacing(4)
+        self.thumb_hdr_lbl = QLabel("", thumb_hdr_bar)
+        self.thumb_hdr_lbl.setFont(th_f)
+        tb_row.addWidget(self.thumb_hdr_lbl, 1)
+
+        self.thumb_detach_btn = QPushButton("", thumb_hdr_bar)
+        self.thumb_detach_btn.setProperty("role", "GhostAction")
+        self.thumb_detach_btn.setFixedSize(22, 22)
+        self.thumb_detach_btn.setStyleSheet("padding: 2px;")
+        self.thumb_detach_btn.clicked.connect(lambda: QTimer.singleShot(0, self._toggle_thumbs_detach))
+        tb_row.addWidget(self.thumb_detach_btn)
+
+        self.thumb_close_btn = QPushButton("", thumb_hdr_bar)
+        self.thumb_close_btn.setProperty("role", "GhostAction")
+        self.thumb_close_btn.setFixedSize(22, 22)
+        self.thumb_close_btn.setStyleSheet("padding: 2px;")
+        self.thumb_close_btn.clicked.connect(lambda: QTimer.singleShot(0, lambda: self.set_thumbs_open(False)))
+        tb_row.addWidget(self.thumb_close_btn)
+        thumb_layout.addWidget(thumb_hdr_bar)
+
+        self.thumb_list = QListWidget(self.thumb_pane)
         self.thumb_list.setIconSize(QSize(112, 146))
         self.thumb_list.setSpacing(6)
         self.thumb_list.currentRowChanged.connect(self._on_thumb_selected)
-        self.rail_splitter.addWidget(self.thumb_list)
+        thumb_layout.addWidget(self.thumb_list, 1)
+        self.rail_splitter.addWidget(self.thumb_pane)
         self.rail_splitter.setSizes([250, 260])
 
         rail_layout.addWidget(self.rail_splitter, 1)
         root.addWidget(self.nav_rail)
 
-        # Outer Backdrop Frame + Annotation Strip + Interactive PdfCanvas
+        # Document Backdrop + Contextual Ink Bar (HIDDEN by default!) + Scrollable Continuous Multi-Page Stack
         self.canvas_frame = QFrame(self)
         self.canvas_frame.setObjectName("ViewerCanvasFrame")
         canvas_wrap = QVBoxLayout(self.canvas_frame)
@@ -267,9 +341,10 @@ class PdfTabPage(QWidget):
         backdrop_layout.setContentsMargins(6, 6, 6, 6)
         backdrop_layout.setSpacing(6)
 
-        # Compact Annotation & Touch Ink Bar (FlowLayout prevents button clipping)
+        # Ink / Touch Writing Bar (hidden unless user explicitly enables from right rail!)
         self.annot_bar = QFrame(self.backdrop)
         self.annot_bar.setObjectName("CardPanel")
+        self.annot_bar.setVisible(False)
         annot_flow = FlowLayout(self.annot_bar, margin=6, h_spacing=6, v_spacing=4)
 
         self._tool_btns: dict[str, AdaptiveButton] = {}
@@ -308,6 +383,7 @@ class PdfTabPage(QWidget):
         self.undo_annot_btn = AdaptiveButton(_tv("viewer.tool.undo", self._lang), self.annot_bar, role="GhostAction")
         self.undo_annot_btn.setMinimumHeight(26)
         self.undo_annot_btn.setStyleSheet("padding: 3px 9px; font-size: 11px;")
+        self.undo_annot_btn.clicked.connect(self._undo_last_annotation)
         annot_flow.addWidget(self.undo_annot_btn)
 
         self.save_annot_btn = AdaptiveButton(_tv("viewer.save", self._lang), self.annot_bar, role="GhostAction")
@@ -316,37 +392,42 @@ class PdfTabPage(QWidget):
         self.save_annot_btn.clicked.connect(self.save_document)
         annot_flow.addWidget(self.save_annot_btn)
 
+        self.close_annot_btn = QPushButton("", self.annot_bar)
+        self.close_annot_btn.setProperty("role", "GhostAction")
+        self.close_annot_btn.setFixedSize(26, 26)
+        self.close_annot_btn.setStyleSheet("padding: 2px;")
+        self.close_annot_btn.clicked.connect(lambda: self.set_annotation_bar_visible(False))
+        annot_flow.addWidget(self.close_annot_btn)
+
         backdrop_layout.addWidget(self.annot_bar)
 
         self.scroll = QScrollArea(self.backdrop)
         self.scroll.setWidgetResizable(True)
-        self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self.scroll.setObjectName("TransparentHost")
         self.scroll.viewport().setObjectName("TransparentHost")
 
-        page_host = QWidget(self.scroll)
-        page_host.setObjectName("TransparentHost")
-        page_host_layout = QVBoxLayout(page_host)
-        page_host_layout.setContentsMargins(24, 24, 24, 24)
-        page_host_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_host = QWidget(self.scroll)
+        self.page_host.setObjectName("TransparentHost")
+        self.page_host_layout = QVBoxLayout(self.page_host)
+        self.page_host_layout.setContentsMargins(20, 18, 20, 24)
+        self.page_host_layout.setSpacing(16)
+        self.page_host_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
 
-        self.pdf_canvas = PdfCanvas(page_host)
-        self.pdf_canvas.set_session(self.session, page_index=0)
-        self.pdf_canvas.set_rotation_and_zoom(self.rotation, self.zoom)
-        self.pdf_canvas.annotations_changed.connect(self.state_changed.emit)
-        self.pdf_canvas.lookup_word_requested.connect(self.lookup_word_requested.emit)
-        self.pdf_canvas.tool_mode_changed.connect(self._sync_tool_buttons)
-        self.pdf_canvas.touch_writing_changed.connect(self._sync_touch_button)
-        self.pdf_canvas.zoom_delta_requested.connect(lambda d: self.set_zoom(self.zoom + d))
-        self.pdf_canvas.pan_delta_requested.connect(self._pan_scroll_by)
-        self.undo_annot_btn.clicked.connect(self.pdf_canvas.undo_last_annotation)
-        page_host_layout.addWidget(self.pdf_canvas)
+        self._page_canvases: list[PdfCanvas] = []
+        self._rebuild_page_canvases()
 
-        self.scroll.setWidget(page_host)
+        self.scroll.setWidget(self.page_host)
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        self._scroll_render_timer = QTimer(self)
+        self._scroll_render_timer.setSingleShot(True)
+        self._scroll_render_timer.setInterval(25)
+        self._scroll_render_timer.timeout.connect(self.render_visible_pages)
+
         backdrop_layout.addWidget(self.scroll, 1)
         root.addWidget(self.canvas_frame, 1)
 
-        # Load persisted ISO 32000 annotations lazily
+        # Load persisted ISO 32000 annotations into shared store
         try:
             from ..core.pdf_annotations import load_pdf_annotations
 
@@ -357,13 +438,58 @@ class PdfTabPage(QWidget):
         self._populate_toc()
         self._populate_bookmarks()
         self._populate_thumbnails()
-        self.set_rail_mode("both")
+        self._sync_pane_visibility()
         self.retranslate(self._lang)
-        self.render_current_page()
+        self.render_visible_pages()
         self.emit_current_page_words()
 
+    def _rebuild_page_canvases(self) -> None:
+        while self._page_canvases:
+            c = self._page_canvases.pop()
+            self.page_host_layout.removeWidget(c)
+            c.hide()
+            c.deleteLater()
+
+        total = max(1, self.session.page_count)
+        for idx in range(total):
+            c = PdfCanvas(self.page_host, shared_state=self._shared_ann_store)
+            c.set_session(self.session, page_index=idx)
+            c.set_rotation_and_zoom(self.rotation, self.zoom)
+            c.annotations_changed.connect(self.state_changed.emit)
+            c.lookup_word_requested.connect(self.lookup_word_requested.emit)
+            c.tool_mode_changed.connect(self._on_canvas_tool_mode_changed)
+            c.touch_writing_changed.connect(self._on_canvas_touch_changed)
+            c.zoom_delta_requested.connect(lambda d: self.set_zoom(self.zoom + d))
+            c.pan_delta_requested.connect(self._pan_scroll_by)
+            if not self._continuous_scroll:
+                c.setVisible(idx == self.current_page)
+            self.page_host_layout.addWidget(c, 0, Qt.AlignmentFlag.AlignHCenter)
+            self._page_canvases.append(c)
+
+        self.pdf_canvas: PdfCanvas = self._page_canvases[min(self.current_page, len(self._page_canvases) - 1)]
+
+    def _on_canvas_tool_mode_changed(self, active_mode: str) -> None:
+        self._sync_tool_buttons(active_mode)
+        for c in self._page_canvases:
+            if c.tool_mode() != active_mode:
+                c.blockSignals(True)
+                c.set_tool_mode(active_mode)
+                c.blockSignals(False)
+
+    def _on_canvas_touch_changed(self, enabled: bool) -> None:
+        self._sync_touch_button(enabled)
+        for c in self._page_canvases:
+            if c.touch_writing_enabled != enabled:
+                c.blockSignals(True)
+                c.set_touch_writing_enabled(enabled)
+                c.blockSignals(False)
+
+    def _undo_last_annotation(self) -> None:
+        self.pdf_canvas.undo_last_annotation()
+
     def _on_annot_tool_clicked(self, mode_id: str) -> None:
-        self.pdf_canvas.set_tool_mode(mode_id)
+        for c in self._page_canvases:
+            c.set_tool_mode(mode_id)
         self._sync_tool_buttons(mode_id)
 
     def _sync_tool_buttons(self, active_mode: str) -> None:
@@ -373,16 +499,37 @@ class PdfTabPage(QWidget):
             btn.blockSignals(False)
 
     def _on_color_swatch_clicked(self, col_hex: str) -> None:
-        self.pdf_canvas.set_highlight_color(col_hex)
-        self.pdf_canvas.set_ink_color(col_hex)
+        for c in self._page_canvases:
+            c.set_highlight_color(col_hex)
+            c.set_ink_color(col_hex)
 
     def _on_touch_write_toggled(self, checked: bool) -> None:
-        self.pdf_canvas.set_touch_writing_enabled(bool(checked))
+        for c in self._page_canvases:
+            c.set_touch_writing_enabled(bool(checked))
 
     def _sync_touch_button(self, enabled: bool) -> None:
         self.touch_write_btn.blockSignals(True)
         self.touch_write_btn.setChecked(bool(enabled))
         self.touch_write_btn.blockSignals(False)
+
+    def set_annotation_bar_visible(self, visible: bool) -> None:
+        want = bool(visible)
+        self.annot_bar.setVisible(want)
+        if not want and self.pdf_canvas.tool_mode() in ("ink", "eraser"):
+            self._on_annot_tool_clicked("select")
+        self.rail_state_changed.emit()
+
+    def is_annotation_bar_visible(self) -> bool:
+        return self.annot_bar.isVisible()
+
+    def set_continuous_scroll(self, enabled: bool) -> None:
+        want = bool(enabled)
+        if want == self._continuous_scroll:
+            return
+        self._continuous_scroll = want
+        for idx, c in enumerate(self._page_canvases):
+            c.setVisible(True if want else (idx == self.current_page))
+        QTimer.singleShot(0, lambda: self.set_page(self.current_page))
 
     def _pan_scroll_by(self, dx: float, dy: float) -> None:
         hbar = self.scroll.horizontalScrollBar()
@@ -391,25 +538,26 @@ class PdfTabPage(QWidget):
         vbar.setValue(vbar.value() - int(round(dy)))
 
     def has_unsaved_changes(self) -> bool:
-        return self.pdf_canvas.has_unsaved_changes()
+        return bool(self._shared_ann_store.dirty)
 
     def save_document(self) -> bool:
         from ..core.pdf_annotations import save_pdf_annotations
 
-        annotations = self.pdf_canvas.annotations()
-        page_idx = self.current_page
+        annotations = list(self._shared_ann_store.records)
         self.session.close()
         try:
             save_pdf_annotations(self.pdf_path, annotations, create_backup=True, flatten=False)
-            self.pdf_canvas.mark_saved()
+            self._shared_ann_store.dirty = False
             saved = True
         except Exception:
             saved = False
         finally:
             self.session = PdfDocumentSession(self.pdf_path)
-            self.pdf_canvas.set_session(self.session, page_index=page_idx)
+            for idx, c in enumerate(self._page_canvases):
+                c.set_session(self.session, page_index=idx)
         if saved:
-            self.render_current_page()
+            self._rendered_signatures.clear()
+            self.render_visible_pages()
             self.state_changed.emit()
         return saved
 
@@ -430,29 +578,30 @@ class PdfTabPage(QWidget):
             overwrite_current = Path(output_path).resolve() == self.pdf_path.resolve()
         except Exception:
             overwrite_current = False
-        page_idx = self.current_page
         if overwrite_current:
             self.session.close()
         try:
             saved = save_pdf_annotations(
                 self.pdf_path,
-                self.pdf_canvas.annotations(),
+                list(self._shared_ann_store.records),
                 output_path=output_path,
                 create_backup=False,
                 flatten=flatten,
             )
             if saved.resolve() == self.pdf_path.resolve():
-                self.pdf_canvas.mark_saved()
+                self._shared_ann_store.dirty = False
             saved_ok = True
         except Exception:
             saved_ok = False
         finally:
             if overwrite_current:
                 self.session = PdfDocumentSession(self.pdf_path)
-                self.pdf_canvas.set_session(self.session, page_index=page_idx)
+                for idx, c in enumerate(self._page_canvases):
+                    c.set_session(self.session, page_index=idx)
         if saved_ok:
             if overwrite_current:
-                self.render_current_page()
+                self._rendered_signatures.clear()
+                self.render_visible_pages()
             self.state_changed.emit()
         return saved_ok
 
@@ -521,19 +670,142 @@ class PdfTabPage(QWidget):
         if page_idx is not None:
             self.set_page(int(page_idx))
 
+    # --- Independent Closable & Detachable Miniaturas / Indice Panes ---
+
+    def is_thumbs_open(self) -> bool:
+        return self._thumbs_open
+
+    def is_toc_open(self) -> bool:
+        return self._toc_open
+
+    def _sync_pane_visibility(self) -> None:
+        thumbs_docked = self._thumbs_open and not self._thumbs_detached
+        toc_docked = self._toc_open and not self._toc_detached
+        self.thumb_pane.setVisible(self._thumbs_open)
+        self.thumb_list.setVisible(self._thumbs_open)
+        self.toc_pane.setVisible(self._toc_open)
+        any_docked = thumbs_docked or toc_docked
+        self._rail_visible = any_docked
+        self.nav_rail.setVisible(any_docked)
+        if thumbs_docked and toc_docked:
+            self._rail_mode = "both"
+            self.rail_splitter.setSizes([250, 260])
+        elif thumbs_docked:
+            self._rail_mode = "thumbs"
+        elif toc_docked:
+            self._rail_mode = "toc"
+        self.rail_state_changed.emit()
+
+    def set_thumbs_open(self, want_open: bool) -> None:
+        self._thumbs_open = bool(want_open)
+        if not self._thumbs_open:
+            if self._thumbs_detached:
+                self.dock_thumbs(show_docked=False)
+        else:
+            if self._thumbs_detached and self._floating_thumb_win is not None and shiboken6.isValid(self._floating_thumb_win):
+                self._floating_thumb_win.show()
+                self._floating_thumb_win.raise_()
+        self._sync_pane_visibility()
+
+    def set_toc_open(self, want_open: bool) -> None:
+        self._toc_open = bool(want_open)
+        if not self._toc_open:
+            if self._toc_detached:
+                self.dock_toc(show_docked=False)
+        else:
+            if self._toc_detached and self._floating_toc_win is not None and shiboken6.isValid(self._floating_toc_win):
+                self._floating_toc_win.show()
+                self._floating_toc_win.raise_()
+        self._sync_pane_visibility()
+
+    def detach_thumbs(self) -> None:
+        if not shiboken6.isValid(self.thumb_pane):
+            return
+        if self._floating_thumb_win is None or not shiboken6.isValid(self._floating_thumb_win):
+            win = _FloatingPaneWindow(width=270, height=500, parent=self)
+            win.closed_by_user.connect(lambda: QTimer.singleShot(0, lambda: self.set_thumbs_open(False)))
+            self._floating_thumb_win = win
+        self._floating_thumb_win.setWindowTitle(_tv("viewer.rail.thumbs_title", self._lang))
+        self._floating_thumb_win.apply_theme(self._mode)
+        self._floating_thumb_win.attach_panel(self.thumb_pane)
+        self._thumbs_open = True
+        self._thumbs_detached = True
+        self.thumb_pane.setVisible(True)
+        self.thumb_list.setVisible(True)
+        self._floating_thumb_win.show()
+        self._floating_thumb_win.raise_()
+        self._sync_detach_icons()
+        self._sync_pane_visibility()
+
+    def dock_thumbs(self, *, show_docked: bool = True) -> None:
+        if self._floating_thumb_win is not None and shiboken6.isValid(self._floating_thumb_win):
+            self._floating_thumb_win.detach_panel(self.thumb_pane)
+            self._floating_thumb_win.hide()
+        if self.thumb_pane.parentWidget() is not self.rail_splitter:
+            self.rail_splitter.addWidget(self.thumb_pane)
+        self._thumbs_detached = False
+        self._thumbs_open = bool(show_docked)
+        self._sync_detach_icons()
+        self._sync_pane_visibility()
+
+    def _toggle_thumbs_detach(self) -> None:
+        if self._thumbs_detached:
+            self.dock_thumbs(show_docked=True)
+        else:
+            self.detach_thumbs()
+
+    def detach_toc(self) -> None:
+        if not shiboken6.isValid(self.toc_pane):
+            return
+        if self._floating_toc_win is None or not shiboken6.isValid(self._floating_toc_win):
+            win = _FloatingPaneWindow(width=285, height=500, parent=self)
+            win.closed_by_user.connect(lambda: QTimer.singleShot(0, lambda: self.set_toc_open(False)))
+            self._floating_toc_win = win
+        self._floating_toc_win.setWindowTitle(_tv("viewer.rail.toc_title", self._lang))
+        self._floating_toc_win.apply_theme(self._mode)
+        self._floating_toc_win.attach_panel(self.toc_pane)
+        self._toc_open = True
+        self._toc_detached = True
+        self.toc_pane.setVisible(True)
+        self._floating_toc_win.show()
+        self._floating_toc_win.raise_()
+        self._sync_detach_icons()
+        self._sync_pane_visibility()
+
+    def dock_toc(self, *, show_docked: bool = True) -> None:
+        if self._floating_toc_win is not None and shiboken6.isValid(self._floating_toc_win):
+            self._floating_toc_win.detach_panel(self.toc_pane)
+            self._floating_toc_win.hide()
+        if self.toc_pane.parentWidget() is not self.rail_splitter:
+            self.rail_splitter.insertWidget(0, self.toc_pane)
+        self._toc_detached = False
+        self._toc_open = bool(show_docked)
+        self._sync_detach_icons()
+        self._sync_pane_visibility()
+
+    def _toggle_toc_detach(self) -> None:
+        if self._toc_detached:
+            self.dock_toc(show_docked=True)
+        else:
+            self.detach_toc()
+
     def set_rail_mode(self, mode: str) -> None:
+        """Backward-compatible helper opening Miniaturas, Índice, or both simultaneously."""
         clean = mode if mode in ("thumbs", "toc", "both") else "both"
         self._rail_mode = clean
-        self.rail_mode_switch.set_current(clean, animate=True)
-        self.thumb_list.setVisible(clean in ("thumbs", "both"))
-        self.toc_pane.setVisible(clean in ("toc", "both"))
-        if clean == "both":
-            self.rail_splitter.setSizes([250, 260])
+        if self._thumbs_detached:
+            self.dock_thumbs(show_docked=False)
+        if self._toc_detached:
+            self.dock_toc(show_docked=False)
+        self._thumbs_open = clean in ("thumbs", "both")
+        self._toc_open = clean in ("toc", "both")
+        self._sync_pane_visibility()
 
     def rail_mode(self) -> str:
         return self._rail_mode
 
     def _populate_thumbnails(self) -> None:
+        self.thumb_list.blockSignals(True)
         self.thumb_list.clear()
         total = self.session.page_count
         for idx in range(total):
@@ -546,29 +818,78 @@ class PdfTabPage(QWidget):
                 pass
             self.thumb_list.addItem(item)
         if total > 0:
-            self.thumb_list.setCurrentRow(0)
+            self.thumb_list.setCurrentRow(self.current_page)
+        self.thumb_list.blockSignals(False)
 
     def _on_thumb_selected(self, row: int) -> None:
         if 0 <= row < self.session.page_count and row != self.current_page:
-            self.current_page = row
-            self.pdf_canvas.set_session(self.session, page_index=self.current_page)
-            self.render_current_page()
-            self.emit_current_page_words()
-            self.state_changed.emit()
+            self.set_page(row)
 
     def toggle_rail(self) -> None:
-        self._rail_visible = not self._rail_visible
-        self.nav_rail.setVisible(self._rail_visible)
+        if self._rail_visible:
+            self._thumbs_open = False
+            self._toc_open = False
+        else:
+            self._thumbs_open = True
+        self._sync_pane_visibility()
 
-    def set_page(self, page_index: int) -> None:
-        if 0 <= page_index < self.session.page_count:
-            self.current_page = page_index
-            self.pdf_canvas.set_session(self.session, page_index=self.current_page)
-            if self.thumb_list.currentRow() != page_index:
-                self.thumb_list.setCurrentRow(page_index)
-            self.render_current_page()
+    def _on_scroll_changed(self, _value: int = 0) -> None:
+        if not self._continuous_scroll or self._programmatic_scroll or not self._page_canvases:
+            return
+        for c in self._page_canvases:
+            c.hide_popover()
+
+        vbar = self.scroll.verticalScrollBar()
+        vp_h = max(1, self.scroll.viewport().height())
+        mid_y = vbar.value() + vp_h // 2
+
+        best_idx = self.current_page
+        best_dist = 10**9
+        for idx, c in enumerate(self._page_canvases):
+            center = c.y() + c.height() // 2
+            dist = abs(center - mid_y)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+
+        if best_idx != self.current_page:
+            self.current_page = best_idx
+            self.pdf_canvas = self._page_canvases[best_idx]
+            if self.thumb_list.currentRow() != best_idx:
+                self.thumb_list.blockSignals(True)
+                self.thumb_list.setCurrentRow(best_idx)
+                self.thumb_list.blockSignals(False)
             self.emit_current_page_words()
             self.state_changed.emit()
+
+        if not self._scroll_render_timer.isActive():
+            self._scroll_render_timer.start()
+
+    def set_page(self, page_index: int) -> None:
+        if not (0 <= page_index < self.session.page_count):
+            return
+        self.current_page = page_index
+        self.pdf_canvas = self._page_canvases[page_index]
+        if self.thumb_list.currentRow() != page_index:
+            self.thumb_list.blockSignals(True)
+            self.thumb_list.setCurrentRow(page_index)
+            self.thumb_list.blockSignals(False)
+
+        if not self._continuous_scroll:
+            for idx, c in enumerate(self._page_canvases):
+                c.setVisible(idx == page_index)
+            self.scroll.verticalScrollBar().setValue(0)
+        else:
+            self._programmatic_scroll = True
+            try:
+                target_y = max(0, self.pdf_canvas.y() - 12)
+                self.scroll.verticalScrollBar().setValue(target_y)
+            finally:
+                self._programmatic_scroll = False
+
+        self.render_visible_pages()
+        self.emit_current_page_words()
+        self.state_changed.emit()
 
     def emit_current_page_words(self) -> None:
         words = self.session.extract_page_words(self.current_page, limit=16)
@@ -576,73 +897,142 @@ class PdfTabPage(QWidget):
 
     def set_zoom(self, zoom: float) -> None:
         self.zoom = max(0.4, min(3.0, round(float(zoom), 2)))
-        self.pdf_canvas.set_rotation_and_zoom(self.rotation, self.zoom)
-        self.render_current_page()
+        self._rendered_signatures.clear()
+        for c in self._page_canvases:
+            c.set_rotation_and_zoom(self.rotation, self.zoom)
+        if self._continuous_scroll:
+            self._programmatic_scroll = True
+            try:
+                self.scroll.verticalScrollBar().setValue(max(0, self.pdf_canvas.y() - 12))
+            finally:
+                self._programmatic_scroll = False
+        self.render_visible_pages()
         self.state_changed.emit()
 
     def fit_width(self) -> None:
         avail_w = max(240, self.scroll.viewport().width() - 64)
-        self.set_zoom(avail_w / 612.0)
+        base_w = 612.0
+        if 0 <= self.current_page < self.session.page_count:
+            try:
+                pw, ph = self.session.get_page_size(self.current_page)
+                base_w = max(120.0, ph if self.rotation in (90, 270) else pw)
+            except Exception:
+                pass
+        self.set_zoom(avail_w / base_w)
 
     def rotate_cw(self) -> None:
         self.rotation = (self.rotation + 90) % 360
-        self.pdf_canvas.set_rotation_and_zoom(self.rotation, self.zoom)
-        self.render_current_page()
+        self._rendered_signatures.clear()
+        for c in self._page_canvases:
+            c.set_rotation_and_zoom(self.rotation, self.zoom)
+        self.render_visible_pages()
         self.state_changed.emit()
 
-    def render_current_page(self) -> None:
+    def _visible_page_indices(self) -> list[int]:
+        if not self._page_canvases:
+            return []
+        if not self._continuous_scroll:
+            return [self.current_page]
+        v_top = self.scroll.verticalScrollBar().value()
+        vp_h = max(200, self.scroll.viewport().height())
+        v_bot = v_top + vp_h
+        hits: list[int] = []
+        for idx, c in enumerate(self._page_canvases):
+            top = c.y()
+            bot = top + max(1, c.height())
+            if bot >= (v_top - vp_h * 0.5) and top <= (v_bot + vp_h * 0.5):
+                hits.append(idx)
+        if self.current_page not in hits:
+            hits.insert(0, self.current_page)
+        # Ensure +/- 1 buffer around active viewport
+        expanded: list[int] = []
+        seen: set[int] = set()
+        for idx in hits:
+            for cand in (idx, idx - 1, idx + 1):
+                if 0 <= cand < len(self._page_canvases) and cand not in seen:
+                    seen.add(cand)
+                    expanded.append(cand)
+        return expanded
+
+    def render_visible_pages(self) -> None:
         if self.session.page_count <= 0:
             return
-        cached = self.session.get_cached_page(self.current_page, scale=self.zoom, rotation=self.rotation)
-        if cached is not None:
-            self._apply_page_image(cached)
-            return
+        sig = (round(self.zoom, 2), self.rotation)
+        for idx in self._visible_page_indices():
+            if self._rendered_signatures.get(idx) == sig:
+                continue
+            cached = self.session.get_cached_page(idx, scale=self.zoom, rotation=self.rotation)
+            if cached is not None:
+                self._apply_page_image(idx, cached)
+                continue
+            if idx in self._active_tasks:
+                continue
+            task = AsyncPageRenderTask(
+                self.session,
+                self.session.doc_id,
+                idx,
+                self.zoom,
+                self.rotation,
+            )
+            self._active_tasks[idx] = task
+            task.signals.rendered.connect(self._on_async_rendered, Qt.ConnectionType.QueuedConnection)
+            task.signals.failed.connect(self._on_async_failed, Qt.ConnectionType.QueuedConnection)
+            self.backdrop.set_heavy_task_active(True)
+            QThreadPool.globalInstance().start(task)
 
-        task = AsyncPageRenderTask(
-            self.session,
-            self.session.doc_id,
-            self.current_page,
-            self.zoom,
-            self.rotation,
-        )
-        self._active_tasks.add(task)
-        task.signals.rendered.connect(self._on_async_rendered, Qt.ConnectionType.QueuedConnection)
-        task.signals.failed.connect(self._on_async_failed, Qt.ConnectionType.QueuedConnection)
-        self.backdrop.set_heavy_task_active(True)
-        QThreadPool.globalInstance().start(task)
+    def render_current_page(self) -> None:
+        self.render_visible_pages()
 
     def _on_async_rendered(self, doc_id: str, page_index: int, scale: float, rotation: int, image: QImage) -> None:
-        self._active_tasks = {t for t in self._active_tasks if t.page_index != page_index}
+        self._active_tasks.pop(page_index, None)
         if not self._active_tasks:
             self.backdrop.set_heavy_task_active(False)
         if doc_id != self.session.doc_id:
             return
-        if page_index == self.current_page and abs(scale - self.zoom) < 0.01 and rotation == self.rotation:
-            self._apply_page_image(image)
+        if abs(scale - self.zoom) < 0.01 and rotation == self.rotation:
+            self._apply_page_image(page_index, image)
 
     def _on_async_failed(self, doc_id: str, page_index: int, error: str) -> None:
-        del doc_id, page_index, error
-        self._active_tasks.clear()
-        self.backdrop.set_heavy_task_active(False)
+        del doc_id, error
+        self._active_tasks.pop(page_index, None)
+        if not self._active_tasks:
+            self.backdrop.set_heavy_task_active(False)
 
-    def _apply_page_image(self, image: QImage) -> None:
-        self.pdf_canvas.set_rendered_image(image)
+    def _apply_page_image(self, page_index: int, image: QImage) -> None:
+        if 0 <= page_index < len(self._page_canvases):
+            self._page_canvases[page_index].set_rendered_image(image)
+            self._rendered_signatures[page_index] = (round(self.zoom, 2), self.rotation)
+
+    def _sync_detach_icons(self) -> None:
+        p = get_palette(self._mode)
+        self.toc_detach_btn.setIcon(
+            load_svg_icon("split" if self._toc_detached else "detach", color=p["icon_color"], size=12)
+        )
+        self.toc_detach_btn.setToolTip(
+            _tv("viewer.rail.dock" if self._toc_detached else "viewer.rail.detach", self._lang)
+        )
+        self.thumb_detach_btn.setIcon(
+            load_svg_icon("split" if self._thumbs_detached else "detach", color=p["icon_color"], size=12)
+        )
+        self.thumb_detach_btn.setToolTip(
+            _tv("viewer.rail.dock" if self._thumbs_detached else "viewer.rail.detach", self._lang)
+        )
 
     def retranslate(self, lang: str) -> None:
         self._lang = lang
-        self.rail_mode_switch.set_options(
-            [
-                ("thumbs", t("viewer.rail.thumbs", lang)),
-                ("toc", t("viewer.rail.toc", lang)),
-                ("both", t("viewer.rail.both", lang)),
-            ]
-        )
-        self.rail_mode_switch.set_current(self._rail_mode, animate=False)
-        self.toc_hdr_lbl.setText(t("viewer.toc_header", lang))
+        self.toc_hdr_lbl.setText(_tv("viewer.rail.toc_title", lang))
+        self.thumb_hdr_lbl.setText(_tv("viewer.rail.thumbs_title", lang))
+        self.toc_close_btn.setToolTip(_tv("viewer.rail.close", lang))
+        self.thumb_close_btn.setToolTip(_tv("viewer.rail.close", lang))
         self.toc_empty_lbl.setText(t("viewer.toc_empty", lang))
         self.bm_hdr_lbl.setText(t("viewer.bookmarks_header", lang))
         self.bm_add_btn.setText(t("viewer.bookmark_add", lang))
         self.bm_del_btn.setText(t("viewer.bookmark_del", lang))
+        self._sync_detach_icons()
+        if self._floating_thumb_win is not None and shiboken6.isValid(self._floating_thumb_win):
+            self._floating_thumb_win.setWindowTitle(_tv("viewer.rail.thumbs_title", lang))
+        if self._floating_toc_win is not None and shiboken6.isValid(self._floating_toc_win):
+            self._floating_toc_win.setWindowTitle(_tv("viewer.rail.toc_title", lang))
 
         for mid, i18n_key in (
             ("select", "viewer.tool.select"),
@@ -655,20 +1045,34 @@ class PdfTabPage(QWidget):
         self.touch_write_btn.setText(_tv("viewer.tool.touch_write", lang))
         self.undo_annot_btn.setText(_tv("viewer.tool.undo", lang))
         self.save_annot_btn.setText(_tv("viewer.save", lang))
-        self.pdf_canvas.retranslate(lang)
+        self.close_annot_btn.setToolTip(_tv("viewer.rail.close", lang))
+        for c in self._page_canvases:
+            c.retranslate(lang)
 
     def apply_profile(self, profile: ThemeProfile) -> None:
         self._profile = profile
         self._mode = "light" if profile.base_mode == "light" else "dark"
         p = get_palette(self._mode)
         self.backdrop.set_profile(profile)
-        self.rail_mode_switch.apply_theme(profile.base_mode)
-        self.rail_mode_switch.set_animations_enabled(profile.motion_level != "static")
+        self.toc_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
+        self.thumb_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
+        self.close_annot_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
+        self._sync_detach_icons()
         self.undo_annot_btn.setIcon(load_svg_icon("reset", color=p["icon_color"], size=13))
         self.save_annot_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=13))
-        self.pdf_canvas.apply_theme(self._mode)
+        if self._floating_thumb_win is not None and shiboken6.isValid(self._floating_thumb_win):
+            self._floating_thumb_win.apply_theme(self._mode)
+        if self._floating_toc_win is not None and shiboken6.isValid(self._floating_toc_win):
+            self._floating_toc_win.apply_theme(self._mode)
+        for c in self._page_canvases:
+            c.apply_theme(self._mode)
 
     def cleanup(self) -> None:
+        self._scroll_render_timer.stop()
+        for win in (self._floating_thumb_win, self._floating_toc_win):
+            if win is not None and shiboken6.isValid(win):
+                win.hide()
+                win.close()
         self.backdrop.cleanup()
         self.session.close()
 
@@ -677,12 +1081,16 @@ ActiveViewerTab = Union[PdfTabPage, MarkdownTabPage]
 
 
 class ViewerView(QWidget):
-    """Multi-tab PDF/Markdown workspace with TOC/Bookmarks, Kindle-style Dictionary, and Fullscreen."""
+    """Adobe-style multi-tab PDF/Markdown workspace with compact icon toolbar and right vertical tool rail."""
 
     backdrop_toggled = Signal(bool)
     fullscreen_requested = Signal()
     document_inspected = Signal(str, int, int)
     dictionary_lookup_recorded = Signal(str)
+    ai_panel_requested = Signal()
+    preferences_requested = Signal()
+    active_document_changed = Signal(object)
+    document_opened = Signal(object, int)
 
     def __init__(
         self,
@@ -696,81 +1104,86 @@ class ViewerView(QWidget):
         self._lang = "es"
         self._mode = "dark"
         self._is_fullscreen = False
+        self._show_button_labels = False
+        self._continuous_scroll = True
         self._bookmarks = bookmarks_store or BookmarksStore()
         self._dict_engine = dictionary_engine or DictionaryEngine()
         self._guard = guard or MotionPerformanceGuard()
         self._profile = ThemeProfile()
         self._is_dict_detached = False
-        self._floating_dict_win: _FloatingDictionaryWindow | None = None
+        self._floating_dict_win: _FloatingPaneWindow | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 10, 14, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(6)
 
-        # Contextual Labeled Toolbar
+        # Single-Row Compact Top Bar (icon-only by default; optional text labels via Settings)
         bar_frame = QFrame(self)
         bar_frame.setObjectName("CardPanel")
-        bar_flow = FlowLayout(bar_frame, margin=8, h_spacing=6, v_spacing=6)
+        bar_row = QHBoxLayout(bar_frame)
+        bar_row.setContentsMargins(8, 5, 8, 5)
+        bar_row.setSpacing(5)
 
-        self.open_btn = AdaptiveButton("", bar_frame, role="PrimaryAction")
+        self.open_btn = QPushButton("", bar_frame)
+        self.open_btn.setProperty("role", "PrimaryAction")
         self.open_btn.clicked.connect(self._prompt_open_document)
-        bar_flow.addWidget(self.open_btn)
+        bar_row.addWidget(self.open_btn)
 
-        self.save_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        self.save_btn = QPushButton("", bar_frame)
+        self.save_btn.setProperty("role", "GhostAction")
         self.save_btn.clicked.connect(self.save_current)
-        bar_flow.addWidget(self.save_btn)
+        bar_row.addWidget(self.save_btn)
 
-        self.rail_btn = AdaptiveButton("", bar_frame, role="GhostAction")
-        self.rail_btn.clicked.connect(self._toggle_rail)
-        bar_flow.addWidget(self.rail_btn)
+        bar_row.addWidget(self._make_v_sep(bar_frame))
 
-        self.zoom_out_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        self.zoom_out_btn = QPushButton("", bar_frame)
+        self.zoom_out_btn.setProperty("role", "GhostAction")
         self.zoom_out_btn.clicked.connect(lambda: self._step_zoom(-0.15))
-        bar_flow.addWidget(self.zoom_out_btn)
+        bar_row.addWidget(self.zoom_out_btn)
 
         self.zoom_tag = StatusTag("115%", tone="accent", parent=bar_frame)
-        bar_flow.addWidget(self.zoom_tag)
+        bar_row.addWidget(self.zoom_tag)
 
-        self.zoom_in_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        self.zoom_in_btn = QPushButton("", bar_frame)
+        self.zoom_in_btn.setProperty("role", "GhostAction")
         self.zoom_in_btn.clicked.connect(lambda: self._step_zoom(0.15))
-        bar_flow.addWidget(self.zoom_in_btn)
+        bar_row.addWidget(self.zoom_in_btn)
 
-        self.fit_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        self.fit_btn = QPushButton("", bar_frame)
+        self.fit_btn.setProperty("role", "GhostAction")
         self.fit_btn.clicked.connect(self._fit_width)
-        bar_flow.addWidget(self.fit_btn)
+        bar_row.addWidget(self.fit_btn)
 
-        self.prev_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        bar_row.addWidget(self._make_v_sep(bar_frame))
+
+        self.prev_btn = QPushButton("", bar_frame)
+        self.prev_btn.setProperty("role", "GhostAction")
         self.prev_btn.clicked.connect(lambda: self._step_page(-1))
-        bar_flow.addWidget(self.prev_btn)
+        bar_row.addWidget(self.prev_btn)
 
         self.page_tag = StatusTag("0 / 0", tone="muted", parent=bar_frame)
-        bar_flow.addWidget(self.page_tag)
+        bar_row.addWidget(self.page_tag)
 
-        self.next_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        self.next_btn = QPushButton("", bar_frame)
+        self.next_btn.setProperty("role", "GhostAction")
         self.next_btn.clicked.connect(lambda: self._step_page(1))
-        bar_flow.addWidget(self.next_btn)
+        bar_row.addWidget(self.next_btn)
 
-        self.rotate_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        self.rotate_btn = QPushButton("", bar_frame)
+        self.rotate_btn.setProperty("role", "GhostAction")
         self.rotate_btn.clicked.connect(self._rotate_page)
-        bar_flow.addWidget(self.rotate_btn)
+        bar_row.addWidget(self.rotate_btn)
 
-        self.backdrop_btn = AdaptiveButton("", bar_frame, role="ModeTab")
-        self.backdrop_btn.setCheckable(True)
-        self.backdrop_btn.clicked.connect(self._on_backdrop_btn_clicked)
-        bar_flow.addWidget(self.backdrop_btn)
+        bar_row.addStretch(1)
 
-        self.dict_btn = AdaptiveButton("", bar_frame, role="ModeTab")
-        self.dict_btn.setCheckable(True)
-        self.dict_btn.clicked.connect(self._toggle_dictionary_panel)
-        bar_flow.addWidget(self.dict_btn)
-
-        self.fullscreen_btn = AdaptiveButton("", bar_frame, role="GhostAction")
+        self.fullscreen_btn = QPushButton("", bar_frame)
+        self.fullscreen_btn.setProperty("role", "GhostAction")
         self.fullscreen_btn.clicked.connect(self.fullscreen_requested.emit)
-        bar_flow.addWidget(self.fullscreen_btn)
+        bar_row.addWidget(self.fullscreen_btn)
 
         root.addWidget(bar_frame)
 
-        # Body: Multi-Tab Document Area + Collapsible/Detachable Right Offline Dictionary Panel
+        # Body: Multi-Tab Document Area + Detachable Dictionary + Adobe-style Vertical Right Rail
         self._body_row = QHBoxLayout()
         self._body_row.setContentsMargins(0, 0, 0, 0)
         self._body_row.setSpacing(0)
@@ -802,6 +1215,61 @@ class ViewerView(QWidget):
         )
         self._body_row.addWidget(self.dict_panel)
 
+        # Adobe-Style Right Vertical Tool Rail
+        self.right_rail = QFrame(self)
+        self.right_rail.setObjectName("AdobeRightRail")
+        self.right_rail.setFixedWidth(44)
+        rr_lay = QVBoxLayout(self.right_rail)
+        rr_lay.setContentsMargins(6, 8, 6, 8)
+        rr_lay.setSpacing(6)
+
+        self.thumbs_rail_btn = QPushButton("", self.right_rail)
+        self.thumbs_rail_btn.setProperty("role", "ModeTab")
+        self.thumbs_rail_btn.setCheckable(True)
+        self.thumbs_rail_btn.clicked.connect(self._toggle_thumbs_pane)
+        rr_lay.addWidget(self.thumbs_rail_btn)
+        self.rail_btn = self.thumbs_rail_btn  # Compatibility alias
+
+        self.toc_rail_btn = QPushButton("", self.right_rail)
+        self.toc_rail_btn.setProperty("role", "ModeTab")
+        self.toc_rail_btn.setCheckable(True)
+        self.toc_rail_btn.clicked.connect(self._toggle_toc_pane)
+        rr_lay.addWidget(self.toc_rail_btn)
+
+        rr_lay.addWidget(self._make_h_sep(self.right_rail))
+
+        self.ink_rail_btn = QPushButton("", self.right_rail)
+        self.ink_rail_btn.setProperty("role", "ModeTab")
+        self.ink_rail_btn.setCheckable(True)
+        self.ink_rail_btn.clicked.connect(self._toggle_ink_bar)
+        rr_lay.addWidget(self.ink_rail_btn)
+
+        self.dict_btn = QPushButton("", self.right_rail)
+        self.dict_btn.setProperty("role", "ModeTab")
+        self.dict_btn.setCheckable(True)
+        self.dict_btn.clicked.connect(self._toggle_dictionary_panel)
+        rr_lay.addWidget(self.dict_btn)
+
+        self.ai_rail_btn = QPushButton("", self.right_rail)
+        self.ai_rail_btn.setProperty("role", "ModeTab")
+        self.ai_rail_btn.setCheckable(True)
+        self.ai_rail_btn.clicked.connect(self.ai_panel_requested.emit)
+        rr_lay.addWidget(self.ai_rail_btn)
+
+        self.backdrop_btn = QPushButton("", self.right_rail)
+        self.backdrop_btn.setProperty("role", "ModeTab")
+        self.backdrop_btn.setCheckable(True)
+        self.backdrop_btn.clicked.connect(self._on_backdrop_btn_clicked)
+        rr_lay.addWidget(self.backdrop_btn)
+
+        rr_lay.addStretch(1)
+
+        self.settings_rail_btn = QPushButton("", self.right_rail)
+        self.settings_rail_btn.setProperty("role", "GhostAction")
+        self.settings_rail_btn.clicked.connect(self.preferences_requested.emit)
+        rr_lay.addWidget(self.settings_rail_btn)
+
+        self._body_row.addWidget(self.right_rail)
         root.addLayout(self._body_row, 1)
 
         save_sc = QShortcut(QKeySequence("Ctrl+S"), self)
@@ -809,7 +1277,78 @@ class ViewerView(QWidget):
         save_sc.activated.connect(self.save_current)
         self._save_shortcut = save_sc
 
+        self.set_show_button_labels(False)
         self.retranslate("es")
+
+    def _make_v_sep(self, parent: QWidget) -> QFrame:
+        sep = QFrame(parent)
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFixedWidth(1)
+        sep.setFixedHeight(20)
+        sep.setStyleSheet("background-color: #334155;")
+        return sep
+
+    def _make_h_sep(self, parent: QWidget) -> QFrame:
+        sep = QFrame(parent)
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: #334155;")
+        return sep
+
+    def _all_toolbar_buttons(self) -> list[tuple[QPushButton, str]]:
+        return [
+            (self.open_btn, t("viewer.open", self._lang)),
+            (self.save_btn, _tv("viewer.save", self._lang)),
+            (self.zoom_out_btn, t("viewer.zoom_out", self._lang)),
+            (self.zoom_in_btn, t("viewer.zoom_in", self._lang)),
+            (self.fit_btn, t("viewer.fit_width", self._lang)),
+            (self.prev_btn, t("viewer.prev", self._lang)),
+            (self.next_btn, t("viewer.next", self._lang)),
+            (self.rotate_btn, t("viewer.rotate", self._lang)),
+            (
+                self.fullscreen_btn,
+                t("viewer.exit_fullscreen" if self._is_fullscreen else "viewer.fullscreen", self._lang),
+            ),
+            (self.thumbs_rail_btn, _tv("viewer.rail.thumbs_title", self._lang)),
+            (self.toc_rail_btn, _tv("viewer.rail.toc_title", self._lang)),
+            (self.ink_rail_btn, _tv("viewer.rail.ink_tools", self._lang)),
+            (self.dict_btn, t("viewer.dictionary", self._lang)),
+            (self.ai_rail_btn, _tv("viewer.rail.ai", self._lang)),
+            (self.backdrop_btn, t("viewer.backdrop_toggle", self._lang)),
+            (self.settings_rail_btn, _tv("viewer.rail.settings", self._lang)),
+        ]
+
+    def set_show_button_labels(self, show_labels: bool) -> None:
+        self._show_button_labels = bool(show_labels)
+        self.right_rail.setFixedWidth(148 if self._show_button_labels else 44)
+        for btn, label in self._all_toolbar_buttons():
+            btn.setToolTip(label)
+            if self._show_button_labels:
+                btn.setProperty("iconOnly", "false")
+                btn.setMinimumSize(0, 30)
+                btn.setMaximumSize(16777215, 32)
+                btn.setText(label)
+            else:
+                btn.setProperty("iconOnly", "true")
+                btn.setFixedSize(30, 30)
+                btn.setText("")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def show_button_labels(self) -> bool:
+        return self._show_button_labels
+
+    def set_continuous_scroll(self, enabled: bool) -> None:
+        self._continuous_scroll = bool(enabled)
+        for idx in range(self.tabs.count()):
+            tab = self.tabs.widget(idx)
+            if isinstance(tab, PdfTabPage):
+                tab.set_continuous_scroll(self._continuous_scroll)
+
+    def set_ai_panel_checked(self, checked: bool) -> None:
+        self.ai_rail_btn.blockSignals(True)
+        self.ai_rail_btn.setChecked(bool(checked))
+        self.ai_rail_btn.blockSignals(False)
 
     def open_document(self, doc_path: str | Path, *, title_override: str | None = None) -> bool:
         """Open a local .pdf or .md/.markdown document into ViewerView."""
@@ -835,10 +1374,17 @@ class ViewerView(QWidget):
             if isinstance(tab, PdfTabPage) and tab.pdf_path.resolve() == resolved:
                 self.tabs.setCurrentIndex(idx)
                 self._on_active_tab_changed()
+                self.document_opened.emit(resolved, tab.session.page_count)
                 return True
 
         try:
-            tab = PdfTabPage(resolved, bookmarks_store=self._bookmarks, guard=self._guard, parent=self.tabs)
+            tab = PdfTabPage(
+                resolved,
+                bookmarks_store=self._bookmarks,
+                guard=self._guard,
+                continuous_scroll=self._continuous_scroll,
+                parent=self.tabs,
+            )
         except Exception:
             return False
         tab.retranslate(self._lang)
@@ -846,6 +1392,7 @@ class ViewerView(QWidget):
         tab.state_changed.connect(self._on_tab_state_changed)
         tab.page_words_ready.connect(self._on_tab_page_words)
         tab.lookup_word_requested.connect(self.lookup_in_dictionary)
+        tab.rail_state_changed.connect(self._sync_right_rail_state)
         label = title_override or resolved.name
         tab.setProperty("base_tab_title", label)
         new_idx = self.tabs.addTab(tab, label)
@@ -857,6 +1404,7 @@ class ViewerView(QWidget):
         sample_text = tab.session.extract_page_text(0)
         toc_count = len(tab.session.get_toc())
         self.document_inspected.emit(sample_text, tab.session.page_count, toc_count)
+        self.document_opened.emit(resolved, tab.session.page_count)
         return True
 
     def open_markdown(self, md_path: Path, *, title_override: str | None = None) -> bool:
@@ -870,6 +1418,7 @@ class ViewerView(QWidget):
             if isinstance(tab, MarkdownTabPage) and tab.md_path.resolve() == resolved:
                 self.tabs.setCurrentIndex(idx)
                 self._on_active_tab_changed()
+                self.document_opened.emit(resolved, 1)
                 return True
 
         try:
@@ -892,6 +1441,7 @@ class ViewerView(QWidget):
         sample_text = tab.editor_widget.toPlainText()[:1500]
         toc_count = tab.toc_tree.topLevelItemCount()
         self.document_inspected.emit(sample_text, 1, toc_count)
+        self.document_opened.emit(resolved, 1)
         return True
 
     def _on_tab_state_changed(self) -> None:
@@ -910,11 +1460,16 @@ class ViewerView(QWidget):
 
     def _on_active_tab_changed(self) -> None:
         self._sync_toolbar_state()
+        self._sync_right_rail_state()
         tab = self._current_tab()
         if isinstance(tab, PdfTabPage):
             tab.emit_current_page_words()
+            self.active_document_changed.emit(tab.pdf_path)
         elif isinstance(tab, MarkdownTabPage):
             tab.emit_document_words()
+            self.active_document_changed.emit(tab.md_path)
+        else:
+            self.active_document_changed.emit(None)
 
     def _prompt_open_document(self) -> None:
         chosen, _ = QFileDialog.getOpenFileName(
@@ -960,12 +1515,46 @@ class ViewerView(QWidget):
         if self.tabs.count() == 0:
             self.tabs.setVisible(False)
             self.empty_lbl.setVisible(True)
-        self._sync_toolbar_state()
+        self._on_active_tab_changed()
 
     def _toggle_rail(self) -> None:
+        self._toggle_thumbs_pane()
+
+    def _toggle_thumbs_pane(self) -> None:
         tab = self._current_tab()
-        if tab is not None:
+        if isinstance(tab, PdfTabPage):
+            tab.set_thumbs_open(not tab.is_thumbs_open())
+        elif tab is not None:
             tab.toggle_rail()
+        self._sync_right_rail_state()
+
+    def _toggle_toc_pane(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.set_toc_open(not tab.is_toc_open())
+        elif tab is not None:
+            tab.toggle_rail()
+        self._sync_right_rail_state()
+
+    def _toggle_ink_bar(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.set_annotation_bar_visible(not tab.is_annotation_bar_visible())
+        self._sync_right_rail_state()
+
+    def _sync_right_rail_state(self) -> None:
+        tab = self._current_tab()
+        is_pdf = isinstance(tab, PdfTabPage)
+        for btn, val in (
+            (self.thumbs_rail_btn, tab.is_thumbs_open() if is_pdf else False),
+            (self.toc_rail_btn, tab.is_toc_open() if is_pdf else False),
+            (self.ink_rail_btn, tab.is_annotation_bar_visible() if is_pdf else False),
+        ):
+            btn.blockSignals(True)
+            btn.setChecked(bool(val))
+            btn.setEnabled(tab is not None)
+            btn.blockSignals(False)
+        self.ink_rail_btn.setEnabled(is_pdf)
 
     def _step_zoom(self, delta: float) -> None:
         tab = self._current_tab()
@@ -995,9 +1584,9 @@ class ViewerView(QWidget):
     def is_dictionary_detached(self) -> bool:
         return self._is_dict_detached
 
-    def _ensure_floating_window(self) -> _FloatingDictionaryWindow:
+    def _ensure_floating_window(self) -> _FloatingPaneWindow:
         if self._floating_dict_win is None or not shiboken6.isValid(self._floating_dict_win):
-            win = _FloatingDictionaryWindow(parent=self)
+            win = _FloatingPaneWindow(width=320, height=480, parent=self)
             win.setWindowTitle(_tv("dict.floating_title", self._lang))
             win.closed_by_user.connect(self.close_detached_dictionary)
             win.apply_theme(self._mode)
@@ -1024,8 +1613,9 @@ class ViewerView(QWidget):
             else:
                 if self.dict_panel.parentWidget() is not self:
                     self.dict_panel.setParent(self)
+                idx = self._body_row.indexOf(self.right_rail)
                 if self._body_row.indexOf(self.dict_panel) < 0:
-                    self._body_row.addWidget(self.dict_panel)
+                    self._body_row.insertWidget(max(1, idx), self.dict_panel)
                 self.dict_panel.set_detached_state(False)
                 self.dict_panel.setVisible(True)
             tab = self._current_tab()
@@ -1077,8 +1667,9 @@ class ViewerView(QWidget):
             self._floating_dict_win.hide()
         if self.dict_panel.parentWidget() is not self:
             self.dict_panel.setParent(self)
+        idx = self._body_row.indexOf(self.right_rail)
         if self._body_row.indexOf(self.dict_panel) < 0:
-            self._body_row.addWidget(self.dict_panel)
+            self._body_row.insertWidget(max(1, idx), self.dict_panel)
         self._is_dict_detached = False
         self.dict_panel.set_detached_state(False)
         self.dict_panel.setVisible(True)
@@ -1092,8 +1683,9 @@ class ViewerView(QWidget):
             self._floating_dict_win.hide()
         if self.dict_panel.parentWidget() is not self:
             self.dict_panel.setParent(self)
+        idx = self._body_row.indexOf(self.right_rail)
         if self._body_row.indexOf(self.dict_panel) < 0:
-            self._body_row.addWidget(self.dict_panel)
+            self._body_row.insertWidget(max(1, idx), self.dict_panel)
         self._is_dict_detached = False
         self.dict_panel.set_detached_state(False)
         self.set_dictionary_visible(False)
@@ -1115,7 +1707,9 @@ class ViewerView(QWidget):
         p = get_palette(self._mode)
         key = "viewer.exit_fullscreen" if self._is_fullscreen else "viewer.fullscreen"
         icon = "exit_fullscreen" if self._is_fullscreen else "fullscreen"
-        self.fullscreen_btn.setText(t(key, self._lang))
+        label = t(key, self._lang)
+        self.fullscreen_btn.setToolTip(label)
+        self.fullscreen_btn.setText(label if self._show_button_labels else "")
         self.fullscreen_btn.setIcon(load_svg_icon(icon, color=p["icon_color"], size=15))
 
     def _sync_toolbar_state(self) -> None:
@@ -1142,17 +1736,7 @@ class ViewerView(QWidget):
 
     def retranslate(self, lang: str) -> None:
         self._lang = lang
-        self.open_btn.setText(t("viewer.open", lang))
-        self.save_btn.setText(_tv("viewer.save", lang))
-        self.rail_btn.setText(t("viewer.thumbnails", lang))
-        self.zoom_out_btn.setText(t("viewer.zoom_out", lang))
-        self.zoom_in_btn.setText(t("viewer.zoom_in", lang))
-        self.fit_btn.setText(t("viewer.fit_width", lang))
-        self.prev_btn.setText(t("viewer.prev", lang))
-        self.next_btn.setText(t("viewer.next", lang))
-        self.rotate_btn.setText(t("viewer.rotate", lang))
-        self.backdrop_btn.setText(t("viewer.backdrop_toggle", lang))
-        self.dict_btn.setText(t("viewer.dictionary", lang))
+        self.set_show_button_labels(self._show_button_labels)
         self.set_fullscreen_state(self._is_fullscreen)
         self.empty_lbl.setText(_tv("viewer.empty_dual", lang))
         self.dict_panel.retranslate(lang)
@@ -1174,15 +1758,20 @@ class ViewerView(QWidget):
 
         self.open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
         self.save_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=15))
-        self.rail_btn.setIcon(load_svg_icon("sidebar_toggle", color=p["icon_color"], size=15))
         self.zoom_out_btn.setIcon(load_svg_icon("zoom_out", color=p["icon_color"], size=15))
         self.zoom_in_btn.setIcon(load_svg_icon("zoom_in", color=p["icon_color"], size=15))
         self.fit_btn.setIcon(load_svg_icon("fit_width", color=p["icon_color"], size=15))
         self.prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=15))
         self.next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=15))
         self.rotate_btn.setIcon(load_svg_icon("rotate", color=p["icon_color"], size=15))
-        self.backdrop_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
+
+        self.thumbs_rail_btn.setIcon(load_svg_icon("thumbs", color=p["icon_color"], size=15))
+        self.toc_rail_btn.setIcon(load_svg_icon("toc", color=p["icon_color"], size=15))
+        self.ink_rail_btn.setIcon(load_svg_icon("ink", color=p["icon_color"], size=15))
         self.dict_btn.setIcon(load_svg_icon("book", color=p["icon_color"], size=15))
+        self.ai_rail_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=15))
+        self.backdrop_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
+        self.settings_rail_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=15))
         self.set_fullscreen_state(self._is_fullscreen)
 
         self.zoom_tag.apply_theme(self._mode)

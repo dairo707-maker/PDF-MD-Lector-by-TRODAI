@@ -127,6 +127,150 @@ _BUNDLED_LEXICONS: dict[str, list[tuple[str, str, str, str]]] = {
         ("archivo", "sust.", "Conjunto estructurado de bytes almacenado bajo un nombre en disco local.", "fichero, documento"),
         ("nota", "sust.", "Comentario o observacion adherida a una seccion especifica durante la lectura.", "anotacion, apunte"),
         ("precision", "sust.", "Exactitud y rigor en el renderizado, calculo o ejecucion tecnica.", "exactitud, rigor"),
+        ("telefono", "sust.", "Dispositivo o numero asignado para comunicacion de voz o mensajeria a distancia.", "numero telefonico, linea, celular"),
+        ("direccion", "sust.", "Datos de ubicacion fisica o postal donde reside una persona o funciona una entidad.", "domicilio, ubicacion, residencia"),
+        ("propietario", "sust.", "Persona natural o juridica titular de un bien, mascota, inmueble o derecho.", "dueno, titular"),
+        ("identificacion", "sust.", "Documento o codigo unico que acredita oficialmente la identidad de alguien.", "cedula, documento, registro"),
+        ("correo", "sust.", "Servicio o direccion electronica empleada para enviar y recibir mensajes digitales.", "email, mensajeria"),
+        ("historia", "sust.", "Relacion cronologica y documentada de hechos, antecedentes o atenciones clinicas.", "historial, registro, cronica"),
+        ("clinica", "adj.", "Relativo al examen, diagnostico, evolucion y tratamiento medico de un paciente.", "asistencial, medica"),
+        ("historia clinica", "sust.", "Expediente reservado donde se registran antecedentes, examenes, diagnosticos y formulas.", "expediente medico, historial"),
+        ("formula", "sust.", "Prescripcion escrita con medicamentos, dosis, frecuencia y via de administracion.", "receta, prescripcion"),
+        ("paciente", "sust.", "Ser vivo que recibe atencion, evaluacion o tratamiento por un profesional de la salud.", "atendido, usuario"),
+        ("veterinaria", "sust.", "Rama de la medicina dedicada a la prevencion, diagnostico y curacion de animales.", "medicina animal, zootecnia"),
+        ("diagnostico", "sust.", "Determinacion de la naturaleza de una enfermedad o problema mediante signos y pruebas.", "dictamen, valoracion"),
+        ("tratamiento", "sust.", "Conjunto de medios higienicos, farmacologicos o quirurgicos para aliviar o curar.", "terapia, manejo"),
+        ("medicamento", "sust.", "Sustancia o preparado farmaceutico empleado para prevenir, aliviar o curar dolencias.", "farmaco, medicina"),
+        ("fecha", "sust.", "Indicacion del dia, mes y ano en que ocurre o se expide un documento.", "data, jornada"),
+        ("numero", "sust.", "Signo o cifra que expresa una cantidad, orden o codigo identificador.", "cifra, codigo, folio"),
+        ("ciudad", "sust.", "Nucleo urbano de alta poblacion con organizacion administrativa propia.", "municipio, urbe, localidad"),
+        ("empresa", "sust.", "Organizacion dedicada a actividades economicas, industriales, comerciales o de servicios.", "compania, sociedad, negocio"),
+        ("cliente", "sust.", "Persona u organizacion que adquiere bienes o contrata servicios.", "usuario, comprador, consumidor"),
+        ("servicio", "sust.", "Prestacion intangible realizada para satisfacer una necesidad tecnica, comercial o personal.", "asistencia, prestacion"),
+        ("producto", "sust.", "Bien tangible o resultado elaborado para su comercializacion o uso.", "articulo, mercancia"),
+        ("pago", "sust.", "Entrega de dinero o transferencia realizada para saldar una obligacion economica.", "abono, cancelacion, desembolso"),
+        ("valor", "sust.", "Cuantia economica, utilidad o importancia asignada a un bien o concepto.", "importe, monto, precio"),
+        ("cuenta", "sust.", "Registro ordenado de movimientos economicos o credenciales de acceso de un usuario.", "saldo, estado, perfil"),
+        ("persona", "sust.", "Individuo de la especie humana sujeto de derechos y obligaciones.", "individuo, ciudadano"),
+        ("nombre", "sust.", "Palabra o designacion con la que se identifica a una persona, cosa o entidad.", "denominacion, titulo"),
+        ("apellido", "sust.", "Nombre de familia que identifica el linaje de una persona junto al nombre propio.", "patronimico, filiacion"),
+        ("trabajo", "sust.", "Actividad fisica o intelectual realizada con un proposito productivo o profesional.", "labor, empleo, ocupacion"),
+        ("proyecto", "sust.", "Plan estructurado con objetivos, recursos, plazos y entregables definidos.", "iniciativa, plan, programa"),
+        ("informe", "sust.", "Documento expositivo que presenta hechos, resultados o conclusiones de una actividad.", "reporte, memoria, dictamen"),
+        ("reporte", "sust.", "Comunicacion estructurada sobre hallazgos, metricas o incidencias observadas.", "informe, parte"),
+        ("estudio", "sust.", "Investigacion o analisis detallado sobre una materia o caso especifico.", "analisis, investigacion"),
+        ("salud", "sust.", "Estado de completo bienestar fisico, mental y funcional de un organismo.", "bienestar, sanidad"),
+        ("sistema", "sust.", "Conjunto ordenado de elementos interrelacionados que operan con un fin comun.", "estructura, plataforma"),
+        ("proceso", "sust.", "Secuencia organizada de pasos o transformaciones para lograr un resultado.", "procedimiento, flujo"),
+        ("resultado", "sust.", "Efecto, producto o hallazgo obtenido tras ejecutar una accion o calculo.", "desenlace, salida"),
+        ("dato", "sust.", "Representacion simbolica minima de un hecho, medida o atributo.", "registro, cifra, elemento"),
+        ("informacion", "sust.", "Conjunto organizado de datos procesados que aportan significado y contexto.", "conocimiento, contenido"),
+        ("ley", "sust.", "Norma juridica obligatoria dictada por autoridad competente.", "legislacion, estatuto, precepto"),
+        ("norma", "sust.", "Regla o estandar tecnico o juridico que orienta una conducta o procedimiento.", "regla, estandar, directriz"),
+        ("articulo", "sust.", "Cada una de las divisiones numeradas de una ley, reglamento o texto.", "clausula, apartado"),
+        ("solicitud", "sust.", "Peticion formal presentada para obtener un tramite, informacion o servicio.", "requerimiento, peticion"),
+        ("comunicacion", "sust.", "Transmision e intercambio efectivo de mensajes o notificaciones entre partes.", "aviso, misiva, contacto"),
+        ("mensaje", "sust.", "Contenido escrito o hablado dirigido a uno o varios destinatarios.", "recado, comunicado"),
+        ("certificado", "sust.", "Documento oficial o digital que da fe de un hecho, identidad o cualificacion.", "constancia, diploma, acreditacion"),
+        ("registro", "sust.", "Inscripcion oficial o asiento ordenado de datos y eventos en una base o libro.", "asiento, matricula, inscripcion"),
+        ("control", "sust.", "Comprobacion, seguimiento o regulacion de un proceso para asegurar cumplimiento.", "revision, supervision, chequeo"),
+        ("calidad", "sust.", "Grado en que un conjunto de caracteristicas cumple requisitos tecnicos o de excelencia.", "nivel, excelencia"),
+        ("version", "sust.", "Edicion especifica de un documento o software identificada con numero o fecha.", "revision, edicion"),
+        ("usuario", "sust.", "Persona que opera una aplicacion, servicio o sistema informatico.", "operador, lector"),
+        ("clave", "sust.", "Codigo secreto que autoriza el acceso o descifrado de informacion.", "contrasena, llave"),
+        ("acceso", "sust.", "Posibilidad o autorizacion para entrar, consultar o usar un recurso.", "ingreso, entrada"),
+        ("tiempo", "sust.", "Magnitud fisica que mide la duracion o separacion de acontecimientos.", "plazo, lapso, duracion"),
+        ("costo", "sust.", "Valor monetario de los recursos consumidos para producir un bien o servicio.", "gasto, importe"),
+        ("total", "sust.", "Suma completa y definitiva de las cantidades o partidas consideradas.", "sumatoria, monto final"),
+        ("descuento", "sust.", "Rebaja o deduccion aplicada sobre el precio o importe original.", "rebaja, bonificacion"),
+        ("saldo", "sust.", "Diferencia neta entre ingresos y egresos o monto pendiente en una cuenta.", "remanente, balance"),
+        ("banco", "sust.", "Entidad financiera autorizada para captar depositos, otorgar creditos y gestionar pagos.", "entidad financiera, caja"),
+        ("transferencia", "sust.", "Envio electronico de fondos o datos de una cuenta u origen hacia un destino.", "giro, remesa, traspaso"),
+        ("recibo", "sust.", "Comprobante escrito que acredita la entrega de dinero u objetos.", "constancia, comprobante"),
+        ("garantia", "sust.", "Compromiso que respalda el funcionamiento, calidad o cumplimiento de una obligacion.", "respaldo, fianza, aval"),
+        ("poliza", "sust.", "Documento formal en que constan las condiciones de un contrato de seguro.", "cobertura, contrato de seguro"),
+        ("riesgo", "sust.", "Probabilidad de ocurrencia de un evento adverso y su impacto potencial.", "contingencia, peligro"),
+        ("objetivo", "sust.", "Meta o resultado concreto que se pretende alcanzar mediante acciones planificadas.", "proposito, finalidad, meta"),
+        ("estrategia", "sust.", "Conjunto coordinado de decisiones de largo alcance para cumplir objetivos.", "plan maestro, tactica"),
+        ("indicador", "sust.", "Medida cuantitativa o cualitativa empleada para evaluar desempeno o avance.", "metrica, indice, KPI"),
+        ("meta", "sust.", "Nivel cuantificado y verificable que se espera lograr en un periodo.", "hito, objetivo"),
+        ("equipo", "sust.", "Grupo de personas o conjunto de herramientas organizado para una tarea.", "grupo, dotacion"),
+        ("organizacion", "sust.", "Estructura social o institucional coordinada para fines comunes.", "entidad, institucion"),
+        ("derecho", "sust.", "Facultad legitima reconocida por la ley o conjunto de normas juridicas.", "prerrogativa, facultad"),
+        ("obligacion", "sust.", "Deber juridico o compromiso exigible de dar, hacer o abstenerse.", "deber, compromiso"),
+        ("acuerdo", "sust.", "Resolucion adoptada de comun voluntad entre dos o mas partes.", "convenio, consenso"),
+        ("vigencia", "sust.", "Periodo durante el cual una norma, contrato o documento surte efectos.", "validez, duracion"),
+        ("plazo", "sust.", "Termino o intervalo temporal fijado para cumplir un acto u obligacion.", "vencimiento, termino"),
+        ("sancion", "sust.", "Penalidad o medida correctiva aplicada por incumplir una norma.", "multa, penalidad"),
+        ("auditoria", "sust.", "Examen independiente y sistematico de registros, cuentas o procesos.", "inspeccion, fiscalizacion"),
+        ("evidencia", "sust.", "Prueba clara y verificable que sustenta un hecho o afirmacion.", "prueba, soporte, constancia"),
+        ("prueba", "sust.", "Elemento documental, ensayo o verificacion destinada a demostrar un hecho o fallo.", "ensayo, test, evidencia"),
+        ("ejemplo", "sust.", "Caso o modelo ilustrativo que facilita comprender una regla o concepto.", "muestra, ilustracion"),
+        ("capitulo", "sust.", "Division principal en que se estructura un libro, informe o norma.", "apartado, tomo"),
+        ("seccion", "sust.", "Subdivision tematica dentro de una pagina, informe o ventana.", "bloque, modulo"),
+        ("parrafo", "sust.", "Unidad de texto compuesta por una o varias oraciones sobre una idea.", "apartado, bloque de texto"),
+        ("tabla", "sust.", "Disposicion ordenada de datos en filas y columnas para consulta rapida.", "cuadro, matriz"),
+        ("figura", "sust.", "Ilustracion, esquema o diagrama incorporado dentro de un texto.", "grafico, imagen"),
+        ("grafico", "sust.", "Representacion visual de datos numericos o relaciones mediante trazos.", "diagrama, esquema"),
+        ("imagen", "sust.", "Representacion visual fotografica, escaneada o vectorial de un objeto o escena.", "figura, lamina"),
+        ("enlace", "sust.", "Referencia interactiva que conecta con otra pagina, seccion o recurso.", "vinculo, hipervinculo"),
+        ("codigo", "sust.", "Sistema de simbolos, instrucciones de software o identificador estructurado.", "clave, script, identificador"),
+        ("formato", "sust.", "Estructura o especificacion tecnica de presentacion y codificacion de un archivo.", "plantilla, diseno, extension"),
+        ("memoria", "sust.", "Componente donde se almacenan datos o instrucciones temporal o permanentemente.", "RAM, almacenamiento"),
+        ("velocidad", "sust.", "Rapidez con que se ejecuta una operacion, lectura o transmision.", "tasa, ritmo"),
+        ("pantalla", "sust.", "Superficie visual del dispositivo donde se despliegan documentos e interfaces.", "monitor, visor"),
+        ("teclado", "sust.", "Dispositivo de entrada compuesto por teclas para escribir y activar atajos.", "periferico de entrada"),
+        ("impresora", "sust.", "Periferico destinado a reproducir textos e imagenes digitales sobre papel.", "equipo de impresion"),
+        ("red", "sust.", "Conjunto de equipos interconectados para compartir informacion o recursos.", "conexion, malla"),
+        ("servidor", "sust.", "Equipo o proceso que provee servicios y datos a otros programas clientes.", "host, nodo"),
+        ("nube", "sust.", "Infraestructura remota de almacenamiento y computo accesible por internet.", "almacenamiento remoto"),
+        ("copia", "sust.", "Duplicado fiel de un archivo o documento para respaldo o distribucion.", "duplicado, respaldo"),
+        ("respaldo", "sust.", "Copia de seguridad conservada para recuperar datos ante fallos o borrados.", "backup, salvaguarda"),
+        ("nit", "sust.", "Numero de Identificacion Tributaria asignado en Colombia a contribuyentes y empresas.", "identificacion fiscal, RUT"),
+        ("folio", "sust.", "Hoja numerada de un expediente, libro o documento oficial.", "pagina, hoja"),
+        ("hoja", "sust.", "Cada lamina fisica o digital que contiene contenido impreso o escrito.", "pagina, folio"),
+        ("ruta", "sust.", "Cadena jerarquica de carpetas que indica la ubicacion exacta de un archivo.", "directorio, path"),
+        ("carpeta", "sust.", "Contenedor logico del sistema de archivos para organizar documentos.", "directorio, folder"),
+        ("texto", "sust.", "Secuencia coherente de caracteres y palabras que transmite un mensaje.", "escrito, redaccion"),
+        ("titulo", "sust.", "Encabezado principal que identifica la materia de una obra o documento.", "rotulo, epigrafe"),
+        ("contenido", "sust.", "Materia o conjunto de datos e ideas incluidos dentro de un documento.", "materia, texto"),
+        ("observacion", "sust.", "Anotacion descriptiva o comentario realizado tras examinar un hecho o caso.", "nota, reparo, hallazgo"),
+        ("recomendacion", "sust.", "Sugerencia fundamentada de accion a seguir tras un analisis.", "consejo, pauta"),
+        ("conclusion", "sust.", "Resolucion o sintesis final derivada del analisis previo.", "cierre, dictamen"),
+        ("acta", "sust.", "Relacion escrita oficial de lo tratado y acordado en una reunion o diligencia.", "minuta, registro"),
+        ("comprobante", "sust.", "Documento que sirve de prueba de una operacion, pago o entrega.", "recibo, soporte"),
+        ("salario", "sust.", "Remuneracion periodica recibida por el trabajador a cambio de sus servicios.", "sueldo, jornal"),
+        ("ingreso", "sust.", "Entrada economica percibida o admision formal en un establecimiento.", "entrada, renta, admision"),
+        ("egreso", "sust.", "Salida de dinero por pago o gasto, o salida hospitalaria de un paciente.", "gasto, salida"),
+        ("presupuesto", "sust.", "Calculo anticipado de ingresos y gastos para un proyecto o periodo.", "estimacion, cotizacion"),
+        ("capital", "sust.", "Patrimonio financiero invertido o suma principal sobre la cual corren intereses.", "fondo, patrimonio"),
+        ("interes", "sust.", "Rendimiento o costo del capital pactado como porcentaje en el tiempo.", "redito, tasa"),
+        ("iva", "sust.", "Impuesto sobre el Valor Agregado aplicado al consumo de bienes y servicios.", "tributo al consumo"),
+        ("vencimiento", "sust.", "Fecha limite en que expira un plazo, factura o producto.", "caducidad, termino"),
+        ("entrega", "sust.", "Acto de poner un bien, documento o resultado a disposicion del destinatario.", "remision, suministro"),
+        ("inventario", "sust.", "Lista ordenada y valorada de bienes o existencias disponibles.", "catalogo, existencias"),
+        ("precio", "sust.", "Cantidad de dinero fijada para adquirir un bien o servicio.", "valor, tarifa"),
+        ("cotizacion", "sust.", "Oferta formal con precios y condiciones antes de confirmar una compra.", "presupuesto, oferta"),
+        ("proveedor", "sust.", "Persona o empresa que suministra bienes o servicios a otra entidad.", "suministrador, abastecedor"),
+        ("representante", "sust.", "Persona facultada para actuar en nombre y por cuenta de otra o de una entidad.", "apoderado, mandatario"),
+        ("entidad", "sust.", "Organismo, institucion, compania o persona juridica reconocida.", "institucion, organismo"),
+        ("universidad", "sust.", "Institucion de educacion superior dedicada a la docencia e investigacion.", "academia, alma mater"),
+        ("edad", "sust.", "Tiempo transcurrido desde el nacimiento de un individuo o mascota.", "anos de vida"),
+        ("peso", "sust.", "Medida de la masa corporal de un individuo u objeto, habitualmente en gramos o kilogramos.", "masa"),
+        ("especie", "sust.", "Categoria biologica basica de clasificacion de los seres vivos (p. ej. canina o felina).", "clase, taxonomia"),
+        ("raza", "sust.", "Variedad diferenciada dentro de una especie animal por rasgos geneticos.", "linaje, variedad"),
+        ("sintoma", "sust.", "Manifestacion percibida o referida que sugiere una alteracion de la salud.", "molestia, indicio"),
+        ("dosis", "sust.", "Cantidad exacta de medicamento administrada en cada toma.", "posologia, porcion"),
+        ("receta", "sust.", "Indicacion medica escrita de medicamentos, dosis y duracion del tratamiento.", "formula, prescripcion"),
+        ("consulta", "sust.", "Atencion profesional, busqueda de informacion o interrogacion sobre un asunto.", "visita, busqueda"),
+        ("vacuna", "sust.", "Preparado biologico que estimula la inmunidad frente a una enfermedad.", "inmunizacion"),
+        ("cirugia", "sust.", "Procedimiento medico manual e instrumental para corregir o tratar afecciones.", "intervencion, operacion"),
+        ("laboratorio", "sust.", "Recinto equipado para realizar analisis clinicos, ensayos o experimentos.", "centro de analisis"),
+        ("muestra", "sust.", "Porcion representativa tomada de un material u organismo para su analisis.", "especimen, ejemplo"),
+        ("sangre", "sust.", "Tejido liquido vital que circula por vasos sanguineos transportando oxigeno y nutrientes.", "fluido sanguineo"),
+        ("evolucion", "sust.", "Desarrollo gradual de un cuadro clinico, proceso o sistema a lo largo del tiempo.", "progreso, curso"),
+        ("folio", "sust.", "Hoja numerada de un expediente o libro oficial.", "pagina, lamina"),
+        ("ruta", "sust.", "Ubicacion jerarquica de carpetas y nombre de archivo en disco.", "directorio, camino"),
     ],
     "en": [
         ("document", "noun", "A structured written or digital record conveying information or evidence.", "file, record, paper"),
@@ -169,6 +313,29 @@ _BUNDLED_LEXICONS: dict[str, list[tuple[str, str, str, str]]] = {
         ("watermark", "noun", "Translucent text or seal stamped across pages to indicate status.", "stamp, imprint"),
         ("merge", "verb", "Combine multiple PDF documents sequentially into a single file.", "combine, join"),
         ("split", "verb", "Divide a multi-page PDF into separate ranges or individual files.", "separate, extract"),
+        ("phone", "noun", "Communication device or assigned dialing number for voice and messaging.", "telephone, line"),
+        ("address", "noun", "Physical location or electronic destination assigned to a person or organization.", "location, residence"),
+        ("owner", "noun", "Legal holder or person possessing a property, record, or pet.", "proprietor, holder"),
+        ("identification", "noun", "Official credential or unique code verifying who a person or entity is.", "ID, credential"),
+        ("email", "noun", "Digital messaging address and protocol for sending electronic mail.", "mail, inbox"),
+        ("clinical", "adj.", "Relating to direct medical observation, diagnosis, and care of a patient.", "medical, therapeutic"),
+        ("diagnosis", "noun", "Identification of the nature and cause of a condition from signs and tests.", "assessment, finding"),
+        ("treatment", "noun", "Medical care or therapy applied to relieve or cure a condition.", "therapy, regimen"),
+        ("prescription", "noun", "Written clinical order specifying medication, dosage, and administration.", "formula, Rx"),
+        ("patient", "noun", "Individual or animal receiving clinical evaluation or medical care.", "subject, case"),
+        ("date", "noun", "Specified calendar day, month, and year of an event or issuance.", "day, timestamp"),
+        ("number", "noun", "Numerical value or alphanumeric code identifying an item or quantity.", "figure, count, code"),
+        ("city", "noun", "Large municipality or urban settlement with local administration.", "town, municipality"),
+        ("company", "noun", "Commercial organization engaged in business or professional services.", "firm, enterprise"),
+        ("client", "noun", "Person or organization receiving professional services or goods.", "customer, patron"),
+        ("payment", "noun", "Transfer of funds to settle an invoice, balance, or obligation.", "remittance, settlement"),
+        ("total", "noun", "Final sum obtained by adding all listed items, fees, and taxes.", "sum, aggregate"),
+        ("report", "noun", "Formal account presenting findings, status, or metrics from analysis.", "brief, dossier"),
+        ("project", "noun", "Planned undertaking with defined scope, milestones, and deliverables.", "initiative, program"),
+        ("evidence", "noun", "Verified material or record establishing a factual conclusion.", "proof, exhibit"),
+        ("backup", "noun", "Duplicate copy retained safely to restore lost or corrupted data.", "archive, copy"),
+        ("export", "verb", "Save data or conversations into an external portable file format.", "output, extract"),
+        ("history", "noun", "Chronological log of past events, clinical notes, or messages.", "log, timeline"),
     ],
 }
 
@@ -202,13 +369,18 @@ class DictionaryEngine:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_norm ON entries (norm)")
         return conn
 
-    def _seed_entries(self, lang: str, rows: list[tuple[str, str, str, str]]) -> int:
+    def _seed_entries(self, lang: str, rows: list[tuple[str, str, str, str]], *, replace_existing: bool = True) -> int:
         db_path = self._db_path(lang)
         conn = self._init_db(db_path)
+        sql = (
+            "INSERT OR REPLACE INTO entries (norm, word, pos, definition, synonyms) VALUES (?, ?, ?, ?, ?)"
+            if replace_existing
+            else "INSERT OR IGNORE INTO entries (norm, word, pos, definition, synonyms) VALUES (?, ?, ?, ?, ?)"
+        )
         try:
             with conn:
                 conn.executemany(
-                    "INSERT OR REPLACE INTO entries (norm, word, pos, definition, synonyms) VALUES (?, ?, ?, ?, ?)",
+                    sql,
                     [(normalize_term(w), w.strip(), pos.strip(), dfn.strip(), syn.strip()) for w, pos, dfn, syn in rows],
                 )
             return len(rows)
@@ -219,7 +391,9 @@ class DictionaryEngine:
         for code, rows in _BUNDLED_LEXICONS.items():
             db = self._db_path(code)
             if not db.exists() or db.stat().st_size == 0:
-                self._seed_entries(code, rows)
+                self._seed_entries(code, rows, replace_existing=True)
+            elif self.entry_count(code) < len(rows):
+                self._seed_entries(code, rows, replace_existing=False)
 
     def installed_languages(self) -> list[str]:
         codes: list[str] = []
@@ -241,7 +415,8 @@ class DictionaryEngine:
             conn.close()
 
     def lookup(self, word: str, lang: str = "es") -> list[DictionaryEntry]:
-        norm = normalize_term(word)
+        cleaned = (word or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/")
+        norm = normalize_term(cleaned)
         if not norm:
             return []
         db = self._db_path(lang)
@@ -253,12 +428,24 @@ class DictionaryEngine:
                 "SELECT word, pos, definition, synonyms FROM entries WHERE norm = ? ORDER BY pos",
                 (norm,),
             ).fetchall()
-            # Try simple Spanish/English plural fallback if exact hit is absent
+            # Try simple Spanish/English plural or gender inflections if exact hit is absent
             if not rows and len(norm) > 4 and norm.endswith("s"):
-                singular = norm[:-2] if norm.endswith("es") and len(norm) > 5 else norm[:-1]
+                candidates = []
+                if norm.endswith("es") and len(norm) > 5:
+                    candidates.append(norm[:-2])
+                candidates.append(norm[:-1])
+                for cand in candidates:
+                    rows = conn.execute(
+                        "SELECT word, pos, definition, synonyms FROM entries WHERE norm = ? ORDER BY pos",
+                        (cand,),
+                    ).fetchall()
+                    if rows:
+                        break
+            if not rows and len(norm) > 4 and norm.endswith(("o", "a")):
+                alt = norm[:-1] + ("a" if norm.endswith("o") else "o")
                 rows = conn.execute(
                     "SELECT word, pos, definition, synonyms FROM entries WHERE norm = ? ORDER BY pos",
-                    (singular,),
+                    (alt,),
                 ).fetchall()
             out: list[DictionaryEntry] = []
             for w, pos, dfn, syn in rows:

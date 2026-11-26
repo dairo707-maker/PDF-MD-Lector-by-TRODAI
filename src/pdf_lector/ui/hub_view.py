@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -9,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
 import shiboken6
 
 from ..core.i18n import HUB_CATEGORIES, t
+from ..core.recent_docs import RecentDocEntry, RecentDocumentsStore
 from ..core.usage_insights import LocalUsageInsights
 from ..theme.motion_engine import MotionBackdropWidget, MotionPerformanceGuard
 from ..theme.palette import MONO_FONT_FAMILY, UI_FONT_FAMILY, get_palette
@@ -44,18 +48,53 @@ _HERO_EYEBROW = {
     "pt": "SUITE MODULAR PDF + MARKDOWN · TRODAI",
 }
 
+_HUB_RECENT_TEXTS: dict[str, dict[str, str]] = {
+    "es": {
+        "title": "Abiertos recientemente",
+        "badge": "FAVORITOS PRIMERO",
+        "clear": "Limpiar recientes",
+        "empty": "Aun no has abierto PDFs o Markdown recientes. Abre uno y fijalo como favorito.",
+        "pin": "Fijar / Favorito",
+        "unpin": "Quitar de favoritos",
+        "remove": "Quitar de recientes",
+        "open": "Abrir documento",
+    },
+    "en": {
+        "title": "Recently Opened",
+        "badge": "PINNED FIRST",
+        "clear": "Clear recents",
+        "empty": "No recent PDF or Markdown documents yet. Open one and pin your favorites.",
+        "pin": "Pin / Favorite",
+        "unpin": "Unpin favorite",
+        "remove": "Remove from recents",
+        "open": "Open document",
+    },
+    "pt": {
+        "title": "Abertos recentemente",
+        "badge": "FIXADOS PRIMEIRO",
+        "clear": "Limpar recentes",
+        "empty": "Nenhum PDF ou Markdown recente ainda. Abra um e fixe seus favoritos.",
+        "pin": "Fixar / Favorito",
+        "unpin": "Desafixar favorito",
+        "remove": "Remover dos recentes",
+        "open": "Abrir documento",
+    },
+}
+
 
 class HubView(QWidget):
-    """Home hub pairing a customizable Hero Banner, dynamic Quick Actions, local insights, and uniform grouped ToolCards."""
+    """Home hub pairing a customizable Hero Banner, Recents & Pinned docs, Quick Actions, and uniform ToolCards."""
 
     open_pdf_requested = Signal()
     open_studio_requested = Signal()
     tool_activated = Signal(str)
+    recent_document_requested = Signal(str)
 
     def __init__(
         self,
         *,
         insights: LocalUsageInsights | None = None,
+        recent_store: RecentDocumentsStore | None = None,
         guard: MotionPerformanceGuard | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -63,11 +102,13 @@ class HubView(QWidget):
         self._lang = "es"
         self._mode = "dark"
         self._insights = insights or LocalUsageInsights()
+        self._recent_store = recent_store or RecentDocumentsStore()
         self._guard = guard or MotionPerformanceGuard()
         self._quick_action_ids: list[str] = list(DEFAULT_QUICK_ACTION_IDS)
         self._quick_flow: FlowLayout | None = None
         self._quick_box: QWidget | None = None
         self._rec_cards: list[tuple[str, str, ToolCard]] = []
+        self._recent_row_refs: list[tuple[RecentDocEntry, QPushButton, QPushButton, StatusTag]] = []
         # (cat_id, title_key, cat_box, cat_title, cat_sub, cards_flow, cat_cards)
         self._category_widgets: list[
             tuple[str, str, QWidget, QLabel, QLabel, FlowLayout, list[tuple[str, str, ToolCard]]]
@@ -148,6 +189,41 @@ class HubView(QWidget):
         self.scroll_layout = QVBoxLayout(self.scroll_host)
         self.scroll_layout.setContentsMargins(0, 2, 6, 8)
         self.scroll_layout.setSpacing(16)
+
+        # Recent & Pinned Documents Section (Top of Hub scroll area)
+        self.recent_box = QWidget(self.scroll_host)
+        self.recent_box.setObjectName("TransparentHost")
+        recent_layout = QVBoxLayout(self.recent_box)
+        recent_layout.setContentsMargins(0, 0, 0, 0)
+        recent_layout.setSpacing(8)
+
+        recent_head = QHBoxLayout()
+        recent_head.setSpacing(8)
+        self.recent_title = QLabel("", self.recent_box)
+        self.recent_title.setFont(QFont(UI_FONT_FAMILY, 12, QFont.Weight.Bold))
+        recent_head.addWidget(self.recent_title)
+
+        self.recent_badge = StatusTag("", tone="accent", parent=self.recent_box)
+        recent_head.addWidget(self.recent_badge)
+        recent_head.addStretch(1)
+
+        self.recent_clear_btn = AdaptiveButton("", self.recent_box, role="GhostAction")
+        self.recent_clear_btn.setMinimumHeight(26)
+        self.recent_clear_btn.clicked.connect(self._clear_unpinned_recents)
+        recent_head.addWidget(self.recent_clear_btn)
+        recent_layout.addLayout(recent_head)
+
+        self.recent_empty_lbl = QLabel("", self.recent_box)
+        self.recent_empty_lbl.setProperty("tone", "muted")
+        self.recent_empty_lbl.setWordWrap(True)
+        recent_layout.addWidget(self.recent_empty_lbl)
+
+        self.recent_list_layout = QVBoxLayout()
+        self.recent_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.recent_list_layout.setSpacing(5)
+        recent_layout.addLayout(self.recent_list_layout)
+
+        self.scroll_layout.addWidget(self.recent_box)
 
         # Local Recommendations Block ("Recomendado para ti")
         self.rec_box = QWidget(self.scroll_host)
@@ -250,8 +326,88 @@ class HubView(QWidget):
         self.scroll.setWidget(self.scroll_host)
         root.addWidget(self.scroll, 1)
 
+        self.refresh_recents()
         self.refresh_recommendations()
         self.retranslate("es")
+
+    def _clear_unpinned_recents(self) -> None:
+        self._recent_store.clear_unpinned()
+        QTimer.singleShot(0, self.refresh_recents)
+
+    def _toggle_recent_pin(self, doc_path: str) -> None:
+        self._recent_store.toggle_pin(doc_path)
+        QTimer.singleShot(0, self.refresh_recents)
+
+    def _remove_recent_entry(self, doc_path: str) -> None:
+        self._recent_store.remove(doc_path)
+        QTimer.singleShot(0, self.refresh_recents)
+
+    def refresh_recents(self) -> None:
+        if not shiboken6.isValid(self):
+            return
+        while self.recent_list_layout.count():
+            item = self.recent_list_layout.takeAt(0)
+            w = item.widget()
+            if w is not None and shiboken6.isValid(w):
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self._recent_row_refs.clear()
+
+        entries = self._recent_store.list_entries()[:10]
+        self.recent_empty_lbl.setVisible(not entries)
+        txt = _HUB_RECENT_TEXTS.get(self._lang, _HUB_RECENT_TEXTS["es"])
+        p = get_palette(self._mode)
+
+        for entry in entries:
+            row = QFrame(self.recent_box)
+            row.setObjectName("CardPanel")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(10, 6, 8, 6)
+            rl.setSpacing(8)
+
+            type_tag = StatusTag(entry.doc_type, tone="ok" if entry.pinned else "muted", parent=row)
+            type_tag.apply_theme(self._mode)
+            rl.addWidget(type_tag)
+
+            open_btn = QPushButton(entry.name, row)
+            open_btn.setProperty("role", "GhostAction")
+            open_btn.setStyleSheet("text-align: left; border: none; padding: 3px 6px; font-weight: 700;")
+            open_btn.setToolTip(f"{txt['open']}: {entry.path}")
+            open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            open_btn.clicked.connect(lambda _=False, path_s=entry.path: self.recent_document_requested.emit(path_s))
+            rl.addWidget(open_btn, 1)
+
+            meta_parts = [entry.display_timestamp()]
+            if entry.page_count > 0:
+                meta_parts.append(f"{entry.page_count} p.")
+            meta_lbl = QLabel("  ·  ".join(part for part in meta_parts if part), row)
+            meta_lbl.setProperty("mono", "true")
+            meta_lbl.setProperty("tone", "muted")
+            rl.addWidget(meta_lbl)
+
+            pin_btn = QPushButton("", row)
+            pin_btn.setProperty("role", "ModeTab")
+            pin_btn.setCheckable(True)
+            pin_btn.setChecked(entry.pinned)
+            pin_btn.setFixedSize(26, 26)
+            pin_btn.setStyleSheet("padding: 3px;")
+            pin_btn.setToolTip(txt["unpin"] if entry.pinned else txt["pin"])
+            pin_btn.setIcon(load_svg_icon("pin", color=p["tag_ok"] if entry.pinned else p["icon_color"], size=13))
+            pin_btn.clicked.connect(lambda _=False, path_s=entry.path: self._toggle_recent_pin(path_s))
+            rl.addWidget(pin_btn)
+
+            rm_btn = QPushButton("", row)
+            rm_btn.setProperty("role", "GhostAction")
+            rm_btn.setFixedSize(26, 26)
+            rm_btn.setStyleSheet("padding: 3px;")
+            rm_btn.setToolTip(txt["remove"])
+            rm_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
+            rm_btn.clicked.connect(lambda _=False, path_s=entry.path: self._remove_recent_entry(path_s))
+            rl.addWidget(rm_btn)
+
+            self.recent_list_layout.addWidget(row)
+            self._recent_row_refs.append((entry, pin_btn, rm_btn, type_tag))
 
     def quick_action_tool_ids(self) -> list[str]:
         """Return the ordered list of 6 dynamic Quick Action tool_ids currently displayed."""
@@ -379,6 +535,7 @@ class HubView(QWidget):
 
     def _apply_filter(self, raw_query: str) -> None:
         query = raw_query.strip().lower()
+        self.recent_box.setVisible(not query)
         self.rec_box.setVisible(not query)
 
         visible_tools = 0
@@ -413,6 +570,13 @@ class HubView(QWidget):
         self.rec_clear_btn.setText(t("rec.clear", self._lang))
         self.rec_paused_lbl.setText(t("rec.paused_msg", self._lang))
 
+        rtxt = _HUB_RECENT_TEXTS.get(self._lang, _HUB_RECENT_TEXTS["es"])
+        self.recent_title.setText(rtxt["title"])
+        self.recent_badge.setText(rtxt["badge"])
+        self.recent_clear_btn.setText(rtxt["clear"])
+        self.recent_empty_lbl.setText(rtxt["empty"])
+        self.refresh_recents()
+
         for _, title_key, _, cat_title, cat_sub, _, cards in self._category_widgets:
             cat_title.setText(t(title_key, self._lang))
             cat_sub.setText(t(f"{title_key}.sub", self._lang))
@@ -430,6 +594,14 @@ class HubView(QWidget):
         self.hero_open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
         self.hero_studio_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
         self.rec_badge.apply_theme(self._mode)
+        self.recent_badge.apply_theme(self._mode)
+        for entry, pin_btn, rm_btn, type_tag in self._recent_row_refs:
+            if shiboken6.isValid(type_tag):
+                type_tag.apply_theme(self._mode)
+            if shiboken6.isValid(pin_btn):
+                pin_btn.setIcon(load_svg_icon("pin", color=p["tag_ok"] if entry.pinned else p["icon_color"], size=13))
+            if shiboken6.isValid(rm_btn):
+                rm_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
 
         for _, _, card in self._rec_cards:
             card.apply_theme(self._mode)

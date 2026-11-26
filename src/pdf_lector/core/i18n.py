@@ -725,7 +725,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 }
 
 
-def t(key: str, lang: str = "es", **kwargs: object) -> str:
+def t(key: str, lang: str = "es", /, **kwargs: object) -> str:
     """Translate key in ES/EN/PT with clean fallback to ES then key."""
     table = TRANSLATIONS.get(lang, TRANSLATIONS["es"])
     text = table.get(key) or TRANSLATIONS["es"].get(key) or key

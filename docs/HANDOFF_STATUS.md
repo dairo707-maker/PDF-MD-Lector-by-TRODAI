@@ -4,7 +4,7 @@
 >
 > Lee primero [`CLAUDE.md`](../CLAUDE.md) para las reglas no negociables del proyecto y comandos en OneDrive.
 
-- **Ultima actualizacion:** `2026-11-26T10:55-05:00`
+- **Ultima actualizacion:** `2026-11-26T13:50-05:00`
 - **Base validada previa:** `v0.1.0-alpha.2` (`14 passed` iniciales en `tests/test_prototype_theme_motion_splash.py`)
 - **Version entregada:** `0.1.0` (`PDF/MD Lector · by TRODAI`)
 
@@ -129,4 +129,27 @@ Si tomas el relevo tras una interrupcion o limite de cuota:
     - Firma local gratuita dry-run (`scripts/sign_local.ps1 -DryRun`): `SIGN_DRY_EXIT=0` (sin modificar almacenes de certificados).
   - **Revision visual final (`final_screenshots/`):** 10 capturas claro/oscuro (`980x650`, `1200x760`, `1366x720`, Visor mixto `.pdf`/`.md` con Diccionario estilo Kindle cerrado y abierto, y Theme Studio) aprobadas sin recortes ni violaciones de identidad TRODAI.
   - **Git local:** Inicializado en rama `main` con 6 commits semanticos en espanol, `git notes` de trazabilidad y etiqueta anotada `v0.1.0` (sin repositorio remoto ni `git push`).
+- **2026-11-26 13:50 (-05) — Hito M6 UX/UI Estilo Adobe, Rendimiento 60 FPS, Chat IA, Herramientas con Cola y Diccionario -> `COMPLETED`:**
+  - **Archivos creados/actualizados:**
+    - `assets/icons/{pin,detach,comment,eraser,thumbs,send}.svg` (6 nuevos SVGs 100 % poligonales)
+    - `src/pdf_lector/core/{recent_docs,ai_chat_history,i18n,dictionary_engine}.py`
+    - `src/pdf_lector/theme/{motion_engine,palette}.py`
+    - `src/pdf_lector/ui/{ai_panel,dictionary_panel,hub_view,main_window,pdf_canvas,preferences_dialog,theme_studio,tool_workspace,viewer_view}.py`
+    - `scripts/build_exe.py`, `tests/test_m6_ux_refinements.py`
+  - **Mejoras clave implementadas y verificadas:**
+    1. **Paneles Miniaturas e Indice/Marcadores independientes (sin pestana "Ambos"):** ocultables por defecto al abrir PDF, cada uno con boton propio de **Cerrar (`X`)** y **Desacoplar** a ventana flotante independiente; mantienen compatibilidad con `set_rail_mode(...)`.
+    2. **Visor PDF estilo Adobe:** panel lateral izquierdo colapsable automaticamente a cinta (`40px`) al abrir PDF; cinta vertical derecha fija; barra superior de 1 fila solo con iconos y tooltips por defecto (opcion *"Mostrar etiquetas de texto en botones de barras"* en Preferencias).
+    3. **Popover contextual automatico al seleccionar texto:** barra estatica de anotaciones oculta por defecto (accesible desde tinta en cinta derecha); al seleccionar/resaltar texto aparece popover flotante con resaltado en 6 colores, nota adhesiva, comentario, copia y busqueda en diccionario.
+    4. **Scroll vertical continuo multipagina:** pila continua de paginas con renderizado perezoso sincronizado con `Pagina X / N`, miniaturas y preferencias (`continuous_scroll`).
+    5. **Chat IA moderno (`AskDocumentPanel`):** entrada abajo y conversacion arriba con fecha y hora `dd/mm/yyyy HH:mm`, historial persistente por PDF/Markdown, exportar `.md`/`.txt`/`.json`, limpiar historial, contraste Dark/Light corregido y boton cerrar (`close_requested`) funcional.
+    6. **Abiertos recientemente y Favoritos en Inicio (`RecentDocumentsStore`):** listado ordenado por fecha/hora con boton Fijar/Favorito (fijados arriba), abrir en 1 clic y limpiar.
+    7. **Rendimiento 60 FPS en Theme Studio:** blur piramidal bilineal cacheado sin recrear `QMovie` GIF/WebP, coalescencia de sliders (`45ms`), skip de reconstruccion QSS global cuando no cambia `base_mode`, y build `--onedir` en staging `%TEMP%`.
+    8. **Apartado de Herramientas + Cola + Fix `.exe` congelado:** vista inline con previsualizacion multipagina de PDF/MD/imagen, cola por lotes multi-archivo (`Subir/Bajar/Quitar/Limpiar`), solicitud obligatoria de ubicacion de salida y `--collect-submodules pdf_lector` en `scripts/build_exe.py` (`PYZ.pyz` `11/11` modulos empaquetados).
+    9. **Diccionario offline reparado y copiable:** corregido `TypeError` en `i18n.t(key, lang, /)`, lexico ampliado a >180 terminos ES + >60 EN, texto seleccionable con raton/teclado y boton de copiado al portapapeles.
+  - **Resultados exactos de verificacion:**
+    - `tests/test_m6_ux_refinements.py` + `tests/test_prototype_theme_motion_splash.py` + `tests/test_m3_markdown_annotations_dict.py` + `tests/test_m4_ui_updater.py` + `tests/test_m5_integrations_ai_mcp.py`: `40 passed in 25.99s` (luego `tests/test_m6_ux_refinements.py` + `tests/test_m4_ui_updater.py`: `14 passed in 11.86s` tras ajuste visual de `PreferencesDialog`).
+    - `tests/e2e/test_tier1_features.py` + `tests/e2e/test_tier3_pairwise.py`: `223 passed in 404.80s`.
+    - `tests/e2e/test_tier2_boundaries.py` + `tests/test_m2_tools_ocr_invoices.py`: `188 passed in 76.64s`.
+    - Compilacion y firma local (`$env:PDF_LECTOR_SIGN_LOCAL="1"; uv run --no-sync python scripts/build_exe.py --setup-only` + portable previo): `dist/PDF-MD-Lector/PDF-MD-Lector.exe` (`Valid`, arranque `FIRST_FRAME_MS=54.49`, GUI wall `604.13 ms`, `11/11` modulos clave en `PYZ.pyz`), `dist/PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `9f19468b198de1e0448af6db8577d621ee4386c6fd937a7572caab984c5d9e3a`), `dist/PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `ad8ef848a56ae36ca8d3a9c2be14f475e4c38d53400feb6f3ffbc2ceb71e8ace`).
+
 

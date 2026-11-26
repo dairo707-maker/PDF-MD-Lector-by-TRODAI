@@ -290,7 +290,7 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
         border-color: {p["border_selected"]};
     }}
 
-    QLineEdit, QComboBox {{
+    QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
         background-color: {p["bg_glass_elevated"]};
         color: {p["text_primary"]};
         border: 1px solid {p["border_strong"]};
@@ -298,7 +298,7 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
         font-size: 12px;
     }}
 
-    QLineEdit:focus, QComboBox:focus {{
+    QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
         border-color: {p["border_selected"]};
     }}
 
@@ -441,6 +441,56 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
         border: 1px solid {p["border_strong"]};
         padding: 5px 8px;
         font-size: 11px;
+    }}
+
+    QMenu {{
+        background-color: {p["bg_menu"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_strong"]};
+        padding: 4px;
+    }}
+
+    QMenu::item {{
+        padding: 6px 14px;
+        color: {p["text_primary"]};
+    }}
+
+    QMenu::item:selected {{
+        background-color: {p["bg_selected_hex"]};
+        color: {p["text_primary"]};
+    }}
+
+    QFrame#AdobeRightRail {{
+        background-color: {p["bg_sidebar"]};
+        border-left: 1px solid {p["border_hairline"]};
+    }}
+
+    QWidget#SidebarRibbon {{
+        background-color: {p["bg_sidebar"]};
+        border-right: 1px solid {p["border_hairline"]};
+    }}
+
+    QFrame#RailPaneHeader {{
+        background-color: {p["bg_glass_elevated"]};
+        border-bottom: 1px solid {p["border_hairline"]};
+    }}
+
+    QFrame#SelectionPopover {{
+        background-color: {p["bg_menu"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_strong"]};
+    }}
+
+    QPushButton[iconOnly="true"] {{
+        padding: 5px;
+        min-width: 28px;
+        min-height: 28px;
+    }}
+
+    QTextBrowser {{
+        background-color: {p["bg_glass"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_hairline"]};
     }}
 
     QSplitter::handle {{

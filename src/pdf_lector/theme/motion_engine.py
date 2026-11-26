@@ -137,10 +137,13 @@ class MotionBackdropWidget(QWidget):
         self._heavy_task_active = False
         self._phase = 0.0
         self._static_pixmap: QPixmap | None = None
+        self._static_image: QImage | None = None
         self._static_luminance: float = 0.25
         self._movie: QMovie | None = None
         self._movie_frame_lum: float = 0.25
-        self._loaded_media_key: tuple[bool, str, int] | None = None
+        self._loaded_media_key: tuple[bool, str] | None = None
+        self._render_cache_key: tuple[int, int, int, int] | None = None
+        self._render_cache_pixmap: QPixmap | None = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
@@ -180,13 +183,16 @@ class MotionBackdropWidget(QWidget):
     def _reload_media(self) -> None:
         enabled = self._surface_enabled()
         raw_path = self._profile.banner_path.strip()
-        media_key = (enabled, raw_path, int(self._profile.blur_radius))
+        media_key = (enabled, raw_path)
         if media_key == self._loaded_media_key:
             return
         self._loaded_media_key = media_key
+        self._render_cache_key = None
+        self._render_cache_pixmap = None
 
         self._clear_movie()
         self._static_pixmap = None
+        self._static_image = None
         self._static_luminance = 0.85 if self._profile.base_mode == "light" else 0.15
 
         if not enabled or not raw_path:
@@ -209,11 +215,60 @@ class MotionBackdropWidget(QWidget):
             movie.deleteLater()
 
         try:
-            pm, lum = load_processed_banner(path, self._profile.blur_radius)
+            pm, lum = load_processed_banner(path, 0)
             self._static_pixmap = pm
+            self._static_image = pm.toImage() if not pm.isNull() else None
             self._static_luminance = lum
         except Exception:
             self._static_pixmap = None
+            self._static_image = None
+
+    def _fast_cover_blur(self, source_pm: QPixmap, blur_radius: int, frame_tag: int) -> QPixmap:
+        w = max(1, self.width())
+        h = max(1, self.height())
+        br = max(0, min(24, int(blur_radius)))
+        key = (w, h, br, frame_tag)
+        if self._render_cache_key == key and self._render_cache_pixmap is not None:
+            return self._render_cache_pixmap
+
+        scaled = source_pm.scaled(
+            w,
+            h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.FastTransformation if br > 0 else Qt.TransformationMode.SmoothTransformation,
+        )
+        sx = max(0, (scaled.width() - w) // 2)
+        sy = max(0, (scaled.height() - h) // 2)
+        cropped = scaled.copy(sx, sy, w, h)
+        if br > 0:
+            # Ultra-fast bilinear pyramid blur (<1ms/frame) so GIF/slider drag stays 60 FPS.
+            factor = 1.0 + (br * 0.45)
+            small_w = max(8, int(round(w / factor)))
+            small_h = max(8, int(round(h / factor)))
+            down = cropped.scaled(
+                small_w,
+                small_h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            cropped = down.scaled(
+                w,
+                h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        self._render_cache_key = key
+        self._render_cache_pixmap = cropped
+        return cropped
+
+    def _draw_cover_pixmap(self, painter: QPainter, pixmap: QPixmap, opacity: float, *, frame_tag: int = -1) -> None:
+        if pixmap.isNull() or self.width() <= 0 or self.height() <= 0:
+            return
+        rendered = self._fast_cover_blur(pixmap, self._profile.blur_radius, frame_tag)
+        painter.save()
+        painter.setOpacity(opacity)
+        painter.drawPixmap(0, 0, rendered)
+        painter.restore()
 
     def _on_movie_frame(self, _frame_idx: int) -> None:
         self.update()
@@ -267,21 +322,8 @@ class MotionBackdropWidget(QWidget):
     def cleanup(self) -> None:
         self._timer.stop()
         self._clear_movie()
-
-    def _draw_cover_pixmap(self, painter: QPainter, pixmap: QPixmap, opacity: float) -> None:
-        if pixmap.isNull() or self.width() <= 0 or self.height() <= 0:
-            return
-        scaled = pixmap.scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        sx = max(0, (scaled.width() - self.width()) // 2)
-        sy = max(0, (scaled.height() - self.height()) // 2)
-        painter.save()
-        painter.setOpacity(opacity)
-        painter.drawPixmap(0, 0, scaled, sx, sy, self.width(), self.height())
-        painter.restore()
+        self._render_cache_pixmap = None
+        self._render_cache_key = None
 
     def _draw_polygonal_mesh(self, painter: QPainter, palette: dict[str, str], opacity: float) -> None:
         w, h = float(self.width()), float(self.height())
@@ -381,11 +423,16 @@ class MotionBackdropWidget(QWidget):
         if self._movie is not None:
             frame = self._movie.currentPixmap()
             if not frame.isNull():
-                self._draw_cover_pixmap(painter, frame, self._profile.opacity)
+                self._draw_cover_pixmap(
+                    painter,
+                    frame,
+                    self._profile.opacity,
+                    frame_tag=self._movie.currentFrameNumber(),
+                )
                 luminance = self._movie_frame_lum
                 drew_custom_media = True
         elif self._static_pixmap is not None:
-            self._draw_cover_pixmap(painter, self._static_pixmap, self._profile.opacity)
+            self._draw_cover_pixmap(painter, self._static_pixmap, self._profile.opacity, frame_tag=-1)
             luminance = self._static_luminance
             drew_custom_media = True
 

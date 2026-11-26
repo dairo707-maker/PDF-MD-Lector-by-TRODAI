@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -172,7 +172,8 @@ class ThemeStudioView(QWidget):
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal, media_card)
         self.opacity_slider.setRange(10, 85)
-        self.opacity_slider.valueChanged.connect(lambda v: self._update_profile(opacity=v / 100.0))
+        self.opacity_slider.valueChanged.connect(lambda v: self._on_visual_slider_changed(opacity=v / 100.0))
+        self.opacity_slider.sliderReleased.connect(self._flush_pending_slider_emit)
         media_card.layout().addWidget(self.opacity_slider)
 
         bl_row = QHBoxLayout()
@@ -186,8 +187,15 @@ class ThemeStudioView(QWidget):
 
         self.blur_slider = QSlider(Qt.Orientation.Horizontal, media_card)
         self.blur_slider.setRange(0, 24)
-        self.blur_slider.valueChanged.connect(lambda v: self._update_profile(blur_radius=int(v)))
+        self.blur_slider.valueChanged.connect(lambda v: self._on_visual_slider_changed(blur_radius=int(v)))
+        self.blur_slider.sliderReleased.connect(self._flush_pending_slider_emit)
         media_card.layout().addWidget(self.blur_slider)
+
+        self._slider_emit_timer = QTimer(self)
+        self._slider_emit_timer.setSingleShot(True)
+        self._slider_emit_timer.setInterval(45)
+        self._slider_emit_timer.timeout.connect(self._flush_pending_slider_emit)
+        self._last_synced_mode: str = ""
 
         self.auto_scrim_chk = QCheckBox(media_card)
         self.auto_scrim_chk.toggled.connect(lambda v: self._update_profile(auto_scrim=bool(v)))
@@ -378,6 +386,27 @@ class ThemeStudioView(QWidget):
         fresh = replace(default_profile(), language=self._lang)
         self._emit_profile(fresh)
 
+    def _on_visual_slider_changed(self, **changes: object) -> None:
+        if self._syncing:
+            return
+        updated = replace(self._profile, **changes).sanitized(check_media_exists=False)
+        self._profile = updated
+        self.opacity_val_lbl.setText(f"{int(round(updated.opacity * 100))}%")
+        self.blur_val_lbl.setText(f"{updated.blur_radius} px")
+        self.preview_hub_backdrop.set_profile(updated)
+        self.preview_viewer_backdrop.set_profile(updated)
+        if self.opacity_slider.isSliderDown() or self.blur_slider.isSliderDown():
+            if not self._slider_emit_timer.isActive():
+                self._slider_emit_timer.start()
+        else:
+            self._slider_emit_timer.stop()
+            self.profile_changed.emit(updated)
+
+    def _flush_pending_slider_emit(self) -> None:
+        if hasattr(self, "_slider_emit_timer"):
+            self._slider_emit_timer.stop()
+        self.profile_changed.emit(self._profile)
+
     def _update_profile(self, **changes: object) -> None:
         if self._syncing:
             return
@@ -394,17 +423,27 @@ class ThemeStudioView(QWidget):
         try:
             self._profile = profile
             p = get_palette(profile.base_mode)
+            mode_changed = profile.base_mode != self._last_synced_mode
+            self._last_synced_mode = profile.base_mode
 
             anim_ok = profile.motion_level != "static"
-            self.mode_switch.apply_theme(profile.base_mode)
+            if mode_changed:
+                self.mode_switch.apply_theme(profile.base_mode)
+                self.motion_switch.apply_theme(profile.base_mode)
+                self.fps_switch.apply_theme(profile.base_mode)
+                self.guard_tag.apply_theme(profile.base_mode)
+                self.choose_media_btn.setIcon(load_svg_icon("image", color=p["primary_fg"], size=15))
+                self.clear_media_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=15))
+                self.export_btn.setIcon(load_svg_icon("export", color=p["icon_color"], size=15))
+                self.import_btn.setIcon(load_svg_icon("import", color=p["icon_color"], size=15))
+                self.reset_btn.setIcon(load_svg_icon("reset", color=p["tag_ok"], size=15))
+
             self.mode_switch.set_animations_enabled(anim_ok)
             self.mode_switch.set_current(profile.base_mode, animate=True)
 
-            self.motion_switch.apply_theme(profile.base_mode)
             self.motion_switch.set_animations_enabled(anim_ok)
             self.motion_switch.set_current(profile.motion_level, animate=True)
 
-            self.fps_switch.apply_theme(profile.base_mode)
             self.fps_switch.set_animations_enabled(anim_ok)
             self.fps_switch.set_current(str(30 if profile.fps_cap <= 30 else 60), animate=True)
 
@@ -431,13 +470,6 @@ class ThemeStudioView(QWidget):
             tone_map = {"active": "ok", "static": "muted", "battery": "warn", "os_off": "warn", "hidden": "muted"}
             text = t(f"studio.guard.{state.status_code}", self._lang, fps=state.target_fps)
             self.guard_tag.set_tone(tone_map.get(state.status_code, "muted"), text)
-            self.guard_tag.apply_theme(profile.base_mode)
-
-            self.choose_media_btn.setIcon(load_svg_icon("image", color=p["primary_fg"], size=15))
-            self.clear_media_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=15))
-            self.export_btn.setIcon(load_svg_icon("export", color=p["icon_color"], size=15))
-            self.import_btn.setIcon(load_svg_icon("import", color=p["icon_color"], size=15))
-            self.reset_btn.setIcon(load_svg_icon("reset", color=p["tag_ok"], size=15))
         finally:
             self._syncing = False
 

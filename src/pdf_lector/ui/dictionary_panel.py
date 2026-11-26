@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -32,6 +33,9 @@ _LOCAL_DICT_TEXTS: dict[str, dict[str, str]] = {
         "dict.detach": "Desacoplar",
         "dict.dock": "Acoplar",
         "dict.close": "Cerrar",
+        "dict.copy": "Copiar definicion",
+        "dict.copied": "Definicion copiada al portapapeles.",
+        "dict.suggestions": "Sugerencias: {words}",
         "dict.consent_title": "Descargar paquete de idioma",
         "dict.consent_body": "Se conectara a {url} para descargar el diccionario '{lang}' bajo tu solicitud explicita. Continuar?",
     },
@@ -39,6 +43,9 @@ _LOCAL_DICT_TEXTS: dict[str, dict[str, str]] = {
         "dict.detach": "Detach",
         "dict.dock": "Dock",
         "dict.close": "Close",
+        "dict.copy": "Copy definition",
+        "dict.copied": "Definition copied to clipboard.",
+        "dict.suggestions": "Suggestions: {words}",
         "dict.consent_title": "Download language pack",
         "dict.consent_body": "Connect to {url} to download the '{lang}' dictionary at your explicit request. Continue?",
     },
@@ -46,6 +53,9 @@ _LOCAL_DICT_TEXTS: dict[str, dict[str, str]] = {
         "dict.detach": "Desacoplar",
         "dict.dock": "Acoplar",
         "dict.close": "Fechar",
+        "dict.copy": "Copiar definicao",
+        "dict.copied": "Definicao copiada para a area de transferencia.",
+        "dict.suggestions": "Sugestoes: {words}",
         "dict.consent_title": "Baixar pacote de idioma",
         "dict.consent_body": "Conectar a {url} para baixar o dicionario '{lang}' sob sua solicitacao explicita. Continuar?",
     },
@@ -299,26 +309,53 @@ class DictionaryPanel(QFrame):
         rc_layout.setSpacing(6)
 
         res_head = QHBoxLayout()
+        res_head.setSpacing(4)
         self.res_word_lbl = QLabel("—", self.result_card)
         wf = QFont(UI_FONT_FAMILY, 12)
         wf.setWeight(QFont.Weight.Bold)
         self.res_word_lbl.setFont(wf)
+        self.res_word_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.res_word_lbl.setCursor(Qt.CursorShape.IBeamCursor)
         res_head.addWidget(self.res_word_lbl, 1)
 
         self.res_pos_tag = StatusTag("LOCAL", tone="muted", parent=self.result_card)
         res_head.addWidget(self.res_pos_tag)
+
+        self.copy_btn = QPushButton("", self.result_card)
+        self.copy_btn.setProperty("role", "GhostAction")
+        self.copy_btn.setFixedSize(26, 24)
+        self.copy_btn.setStyleSheet("padding: 2px;")
+        self.copy_btn.setToolTip(_td("dict.copy", self._ui_lang))
+        self.copy_btn.clicked.connect(self.copy_current_result)
+        res_head.addWidget(self.copy_btn)
         rc_layout.addLayout(res_head)
 
         self.res_def_lbl = QLabel("", self.result_card)
         self.res_def_lbl.setProperty("tone", "secondary")
         self.res_def_lbl.setWordWrap(True)
+        self.res_def_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.res_def_lbl.setCursor(Qt.CursorShape.IBeamCursor)
         rc_layout.addWidget(self.res_def_lbl)
 
         self.res_syn_lbl = QLabel("", self.result_card)
         self.res_syn_lbl.setProperty("mono", "true")
         self.res_syn_lbl.setProperty("tone", "muted")
         self.res_syn_lbl.setWordWrap(True)
+        self.res_syn_lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.res_syn_lbl.setCursor(Qt.CursorShape.IBeamCursor)
         rc_layout.addWidget(self.res_syn_lbl)
+
+        self.copy_status_lbl = QLabel("", self.result_card)
+        self.copy_status_lbl.setProperty("mono", "true")
+        self.copy_status_lbl.setProperty("tone", "muted")
+        self.copy_status_lbl.setVisible(False)
+        rc_layout.addWidget(self.copy_status_lbl)
         root.addWidget(self.result_card)
 
         # Clickable Page Word Chips
@@ -387,11 +424,31 @@ class DictionaryPanel(QFrame):
         if len(text.strip()) >= 2:
             self.lookup_word(text, record_event=False)
 
+    def copy_current_result(self) -> str:
+        word = self.res_word_lbl.text().strip()
+        pos = self.res_pos_tag.text().strip()
+        defn = self.res_def_lbl.text().strip()
+        syns = self.res_syn_lbl.text().strip()
+        parts = [f"{word} ({pos})" if pos else word]
+        if defn:
+            parts.append(defn)
+        if syns:
+            parts.append(syns)
+        payload = "\n".join(p for p in parts if p)
+        cb = QApplication.clipboard()
+        if cb is not None and payload:
+            cb.setText(payload)
+            self.copy_status_lbl.setText(_td("dict.copied", self._ui_lang))
+            self.copy_status_lbl.setVisible(True)
+            QTimer.singleShot(1800, lambda: self.copy_status_lbl.setVisible(False) if self.copy_status_lbl else None)
+        return payload
+
     def lookup_word(self, word: str, *, record_event: bool = True) -> None:
-        clean = (word or "").strip()
+        clean = (word or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/")
         lang = self.current_dict_lang()
         if not clean:
             return
+        self.copy_status_lbl.setVisible(False)
         hits = self._engine.lookup(clean, lang)
         if hits:
             hit = hits[0]
@@ -407,8 +464,10 @@ class DictionaryPanel(QFrame):
             self.res_word_lbl.setText(clean)
             self.res_pos_tag.set_tone("muted", lang.upper())
             self.res_def_lbl.setText(t("dict.not_found", self._ui_lang, word=clean, lang=lang.upper()))
-            suggestions = self._engine.suggest(clean[:2], lang, limit=4)
-            self.res_syn_lbl.setText(", ".join(suggestions))
+            suggestions = self._engine.suggest(clean[:2], lang, limit=5)
+            self.res_syn_lbl.setText(
+                _td("dict.suggestions", self._ui_lang, words=", ".join(suggestions)) if suggestions else ""
+            )
 
     def _open_manager(self) -> None:
         dlg = DictionaryManagerDialog(self._engine, mode=self._mode, lang=self._ui_lang, parent=self)
@@ -445,6 +504,7 @@ class DictionaryPanel(QFrame):
         self.manage_btn.setText(t("dict.manage_btn", lang))
         self.detach_btn.setText(_td("dict.dock" if self._is_detached else "dict.detach", lang))
         self.close_btn.setText(_td("dict.close", lang))
+        self.copy_btn.setToolTip(_td("dict.copy", lang))
 
     def apply_theme(self, mode: str) -> None:
         self._mode = mode
@@ -452,4 +512,5 @@ class DictionaryPanel(QFrame):
         self.icon_lbl.setPixmap(load_svg_pixmap("book", color=p["text_secondary"], size=16))
         self.detach_btn.setIcon(load_svg_icon("split", color=p["icon_color"], size=13))
         self.close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=13))
+        self.copy_btn.setIcon(load_svg_icon("copy", color=p["icon_color"], size=13))
         self.res_pos_tag.apply_theme(mode)

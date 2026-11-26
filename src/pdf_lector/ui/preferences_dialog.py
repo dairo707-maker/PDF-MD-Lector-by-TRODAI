@@ -39,6 +39,8 @@ class UserPreferences:
     offline_only: bool = False
     insights_enabled: bool = True
     local_api_enabled: bool = False
+    show_button_labels: bool = False
+    continuous_scroll: bool = True
 
 
 def get_preferences_path(app_dir: Path | None = None) -> Path:
@@ -62,6 +64,8 @@ def load_preferences(path: Path | None = None) -> UserPreferences:
             offline_only=bool(raw.get("offline_only", False)),
             insights_enabled=bool(raw.get("insights_enabled", True)),
             local_api_enabled=bool(raw.get("local_api_enabled", False)),
+            show_button_labels=bool(raw.get("show_button_labels", False)),
+            continuous_scroll=bool(raw.get("continuous_scroll", True)),
         )
     except Exception:
         return UserPreferences()
@@ -96,8 +100,8 @@ class PreferencesDialog(QDialog):
         self._prefs = load_preferences(self._prefs_path)
 
         self.setWindowTitle("Preferencias · PDF/MD Lector" if self._lang == "es" else "Preferences · PDF/MD Lector")
-        self.setMinimumSize(520, 390)
-        self.resize(560, 420)
+        self.setMinimumSize(580, 440)
+        self.resize(620, 460)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
@@ -113,8 +117,12 @@ class PreferencesDialog(QDialog):
 
         card = QFrame(self)
         card.setObjectName("CardPanel")
-        form = QFormLayout(card)
-        form.setContentsMargins(12, 10, 12, 10)
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(14, 12, 14, 12)
+        card_lay.setSpacing(10)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(8)
 
         self.author_edit = QLineEdit(self._prefs.annotation_author, card)
@@ -134,19 +142,34 @@ class PreferencesDialog(QDialog):
         lang_idx = max(0, self.lang_combo.findData(self._prefs.default_source_lang))
         self.lang_combo.setCurrentIndex(lang_idx)
         form.addRow("Idioma origen OCR / conversion:", self.lang_combo)
+        card_lay.addLayout(form)
 
         up_state = load_updater_state()
         self.offline_only_chk = QCheckBox("Modo Solo Offline (desactiva chequeos de actualizacion)", card)
         self.offline_only_chk.setChecked(self._prefs.offline_only or up_state.offline_only)
-        form.addRow("", self.offline_only_chk)
+        card_lay.addWidget(self.offline_only_chk)
 
         self.insights_chk = QCheckBox("Activar Acciones Rapidas y sugerencias locales (solo contadores)", card)
         self.insights_chk.setChecked(self._insights.enabled)
-        form.addRow("", self.insights_chk)
+        card_lay.addWidget(self.insights_chk)
 
         self.api_chk = QCheckBox("Permitir API REST local 127.0.0.1 bajo demanda (OFF por defecto)", card)
         self.api_chk.setChecked(self._prefs.local_api_enabled)
-        form.addRow("", self.api_chk)
+        card_lay.addWidget(self.api_chk)
+
+        self.show_labels_chk = QCheckBox(
+            "Mostrar etiquetas de texto en botones de barras (solo iconos por defecto)",
+            card,
+        )
+        self.show_labels_chk.setChecked(self._prefs.show_button_labels)
+        card_lay.addWidget(self.show_labels_chk)
+
+        self.continuous_scroll_chk = QCheckBox(
+            "Desplazamiento vertical continuo entre paginas en Visor PDF",
+            card,
+        )
+        self.continuous_scroll_chk.setChecked(self._prefs.continuous_scroll)
+        card_lay.addWidget(self.continuous_scroll_chk)
 
         root.addWidget(card)
         root.addStretch(1)
@@ -183,6 +206,8 @@ class PreferencesDialog(QDialog):
             offline_only=self.offline_only_chk.isChecked(),
             insights_enabled=self.insights_chk.isChecked(),
             local_api_enabled=self.api_chk.isChecked(),
+            show_button_labels=self.show_labels_chk.isChecked(),
+            continuous_scroll=self.continuous_scroll_chk.isChecked(),
         )
         save_preferences(updated, self._prefs_path)
         self._insights.set_enabled(updated.insights_enabled)
