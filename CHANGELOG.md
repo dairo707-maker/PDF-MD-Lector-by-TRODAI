@@ -3,6 +3,21 @@
 All notable changes to **PDF/MD Lector by TRODAI** are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-26
+
+### Fixed
+- **Dark-Mode Sticky Note Contrast (`theme/palette.py`, `ui/pdf_canvas.py`):** Added an explicit `QTextEdit` palette rule and dark/light card + editor styling (`#F8FAFC` text on `#111C2E` in Dark Mode) so sticky note content is crisp and readable in all themes.
+- **Scroll-Locked Highlights (`ui/pdf_canvas.py`):** Locked canvas widget dimensions strictly to PDF point dimensions * zoom (`_sync_canvas_size` ignores `_rendered_pixmap.size()`, `set_rendered_image` no longer resizes the sheet, and `_effective_scale()` aligns coordinates 1:1 with `self.rect()` + `CompositionMode_Multiply`). Highlights no longer shift or re-stick when scrolling.
+
+### Added
+- **Freehand Pointer Highlighting (`ui/pdf_canvas.py`, `core/pdf_annotations.py`, `ui/viewer_view.py`):** Added `Resaltado libre` (`free_highlight`) tool with translucent Multiply pointer strokes persisted as ISO 32000 `/Ink` with `/CA` & `/ExtGState`, plus direct box-highlight fallback on scanned/non-selectable PDF pages.
+- **Expanded Zoom Range (`10% - 1200%`) (`core/pdf_engine.py`, `ui/pdf_canvas.py`, `ui/viewer_view.py`):** Expanded zoom well beyond 300% (`0.10` to `12.0` / 1200%) with adaptive step sizing and a 4096px PDFium raster safety cap (`128 MB` LRU cache).
+- **Always-Visible Resizable Sticky Notes, Subtle Guide Lines & Hide-Notes Toggle (`ui/pdf_canvas.py`, `core/pdf_annotations.py`, `core/autosave.py`, `ui/notes_panel.py`, `ui/viewer_view.py`):**
+  - Sticky notes (`148x74` default) display category + wrapped content directly on the page with corner/edge resize handle points (`resize_sticky_note`).
+  - Persists `/TRODAIAnchor` coordinates (`anchor_pdf`) and renders a subtle dashed guide line + anchor dot connecting each note to its associated text fragment.
+  - Added `Ctrl+Shift+N` + Eye/Eye-Off toolbar & `NotesPanel` toggles (`set_notes_visible`) to hide/show all notes cleanly during reading.
+- **Direct Attachment Sharing (`core/share_service.py`, `ui/share_dialog.py`, `assets/icons/share.svg`):** Share the active PDF/MD as a real file attachment via Desktop Mail (`MAPISendMailW` via `mapi32.dll`), WhatsApp, Telegram, Microsoft Teams, Webmail (`CF_HDROP` clipboard + URI launcher), or Windows Explorer.
+
 ## [0.3.0] - 2026-11-26
 
 ### Changed

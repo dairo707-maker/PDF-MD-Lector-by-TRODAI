@@ -86,7 +86,7 @@ class PdfDocumentSession:
         pdf_path: Path,
         *,
         max_cache_entries: int = 32,
-        max_cache_bytes: int = 64 * 1024 * 1024,
+        max_cache_bytes: int = 128 * 1024 * 1024,
     ) -> None:
         import pypdfium2 as pdfium
 
@@ -140,7 +140,7 @@ class PdfDocumentSession:
 
     def render_page(self, page_index: int, *, scale: float = 1.0, rotation: int = 0) -> QImage:
         """Render a PDF page to an owned QImage and store in the bounded LRU cache."""
-        safe_scale = max(0.2, min(4.0, float(scale)))
+        safe_scale = max(0.10, min(12.0, float(scale)))
         safe_rot = int(rotation) % 360
         key = self._cache_key(page_index, safe_scale, safe_rot)
 
@@ -158,7 +158,9 @@ class PdfDocumentSession:
             page = self._doc[page_index]
             bitmap = None
             try:
-                bitmap = page.render(scale=safe_scale, rotation=safe_rot)
+                pw, ph = page.get_size()
+                raster_scale = min(safe_scale, 4096.0 / max(1.0, float(pw), float(ph)))
+                bitmap = page.render(scale=raster_scale, rotation=safe_rot)
                 pil_img = bitmap.to_pil().convert("RGBA")
                 raw = pil_img.tobytes("raw", "RGBA")
                 qimg = QImage(raw, pil_img.width, pil_img.height, pil_img.width * 4, QImage.Format.Format_RGBA8888).copy()

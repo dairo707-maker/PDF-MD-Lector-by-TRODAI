@@ -4,13 +4,13 @@
 >
 > Lee primero [`CLAUDE.md`](../CLAUDE.md) para las reglas no negociables del proyecto y comandos en OneDrive.
 
-- **Ultima actualizacion:** `2026-11-26T20:50Z`
-- **Base validada previa:** `v0.2.0` (`M7`, GitHub Release `v0.2.0`)
-- **Version entregada:** `0.3.0` (`PDF/MD Lector · by TRODAI`)
+- **Ultima actualizacion:** `2026-11-26T21:15Z`
+- **Base validada previa:** `v0.3.0` (`M8`, GitHub Release `v0.3.0`)
+- **Version entregada:** `0.4.0` (`PDF/MD Lector · by TRODAI`)
 
 ---
 
-## 1. Mapa de Hitos (M1–M8 + Pista E2E)
+## 1. Mapa de Hitos (M1–M9 + Pista E2E)
 
 | Hito | Alcance principal | Estado actual | Notas / Dependencias |
 |---|---|---|---|
@@ -23,6 +23,7 @@
 | **M6** | Pase completo E2E Tiers 1–4 + suite unitaria (`515/515`), compilacion real `build_exe.py` + `SHA256SUMS.txt` + prueba Splash `.exe`, `sign_local.ps1 -DryRun`, capturas reales claro/oscuro (`980x650`, `1200x760`, `1366x720`), Git local `main` + commits semanticos + `git notes` + tag `v0.1.0` | **COMPLETED** (`515 passed`, build + smoke + capturas + Git local `v0.1.0`) | Sin remoto ni `git push` |
 | **M7 (`v0.2.0`)** | Fixes `ToolCard.mousePressEvent` (`shiboken6.isValid`) y `DocumentRagIndex.index_pdf` (`pypdf`), compuerta hardware IA Local (`ai_hardware.py`) + API BYOK / MCP Oficial legal, diccionario morfologico + `suggest_fuzzy` + Wiktionary opt-in cacheado, notas adhesivas arrastrables con tarjeta flotante + `NotesPanel` (`/Subj`), autoguardado y recuperacion ante cierre inesperado (`autosave.py`), actualizacion directa GitHub Releases y publicacion publica `v0.2.0` | **COMPLETED** (`test_m7_v020_features`: `8 passed`; `test_tier1_features`: `189 passed`; Tiers 2–4 + smoke: `230 passed`; `build_exe.py` firmado `Valid`) | Repo publico MIT + GitHub Release `v0.2.0` |
 | **M8 (`v0.3.0`)** | Botones flotantes sin recuadros e iconos centrados (`32x32` `iconOnly="true"`, cero recortes, `FlowContainer`), TopBar/Visor depurados sin duplicados, idioma fijo desde instalador (`read_installer_language`), Wiktionary por defecto con parser wikitext `w/api.php` + fallback REST `en.wiktionary.org` + sugerencias `opensearch` + cache SQLite, busqueda en documento (`Ctrl+F`) con resaltado PDFium, impresion del sistema (`Ctrl+P` `PrintPdfDialog` con `QPrinterInfo`), Modo Presentacion (`F5` / `Ctrl+L` + compatibilidad con apuntadores inalambricos + HUD inferior ocultable), listado de atajos (`F1` `ShortcutsDialog`), movimiento reactivo al puntero exclusivo en Hero del Hub (`motion_engine.py`), release firmado `v0.3.0` | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/prototype`: `85 passed in 147.91s`; E2E `test_tier1_features` + `v0.3.0`; `FIRST_FRAME_MS=62.36`; live Wiktionary ES/EN OK; capturas `v4/` verificadas) | GitHub Release `v0.3.0` |
+| **M9 (`v0.4.0`)** | Contraste notas en modo oscuro (`QTextEdit` + `#F8FAFC`/`#111C2E` en `StickyNoteCard`), coordenadas de resaltado bloqueadas al lienzo durante scroll (`set_rendered_image` sin `setFixedSize` + `_effective_scale()`), herramienta `Resaltado libre` (`free_highlight` ISO 32000 `/Ink` `/CA` + `Multiply`), zoom ampliado `10% - 1200%` (con tope raster `4096px` y cache `128 MB`), notas visibles en pagina con puntos de redimensionado (`resize_sticky_note`) y linea guia sutil (`/TRODAIAnchor`), toggle ocultar/mostrar notas (`Ctrl+Shift+N` + ojo en barra y `NotesPanel`), compartir PDF como adjunto (`share_service.py`: `MAPISendMailW` + `CF_HDROP` + WhatsApp/Telegram/Teams + `ShareDocumentDialog`) | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/m9/prototype`: `90 passed in 157.87s`; `SVG_CHECK: OK 70 icons`; `EMOJI_CHECK: OK`; `FIRST_FRAME_MS=46.70`; capturas `v5/` verificadas) | GitHub Release `v0.4.0` |
 
 ---
 

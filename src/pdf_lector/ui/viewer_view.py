@@ -46,6 +46,7 @@ from .notes_panel import NotesPanel
 from .pdf_canvas import CLASSIC_HIGHLIGHT_PALETTE, PdfCanvas, SharedAnnotationState
 from .presentation_view import PresentationWindow
 from .print_dialog import PrintPdfDialog
+from .share_dialog import ShareDocumentDialog
 from .svg_icons import load_svg_icon
 from .widgets import AdaptiveButton, FlowLayout, StatusTag
 
@@ -57,9 +58,12 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.find_placeholder": "Buscar texto en el documento (Ctrl+F)...",
         "viewer.print": "Imprimir PDF (Ctrl+P)",
         "viewer.present": "Modo Presentacion (F5 / Ctrl+L)",
+        "viewer.share": "Compartir PDF como adjunto",
+        "viewer.toggle_notes_vis": "Mostrar / ocultar notas en el documento (Ctrl+Shift+N)",
         "viewer.empty_dual": "Abre cualquier PDF o Markdown local o suelta un archivo aqui para leerlo.",
         "viewer.tool.select": "Seleccionar",
-        "viewer.tool.highlight": "Resaltar",
+        "viewer.tool.highlight": "Resaltar texto",
+        "viewer.tool.free_highlight": "Resaltado libre",
         "viewer.tool.note": "Nota",
         "viewer.tool.ink": "Tinta",
         "viewer.tool.eraser": "Borrador",
@@ -83,9 +87,12 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.find_placeholder": "Find text in document (Ctrl+F)...",
         "viewer.print": "Print PDF (Ctrl+P)",
         "viewer.present": "Presentation Mode (F5 / Ctrl+L)",
+        "viewer.share": "Share PDF as attachment",
+        "viewer.toggle_notes_vis": "Show / hide notes on page (Ctrl+Shift+N)",
         "viewer.empty_dual": "Open any local PDF or Markdown file or drop a file here to read.",
         "viewer.tool.select": "Select",
-        "viewer.tool.highlight": "Highlight",
+        "viewer.tool.highlight": "Highlight text",
+        "viewer.tool.free_highlight": "Free highlight",
         "viewer.tool.note": "Note",
         "viewer.tool.ink": "Ink",
         "viewer.tool.eraser": "Eraser",
@@ -109,9 +116,12 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.find_placeholder": "Buscar texto no documento (Ctrl+F)...",
         "viewer.print": "Imprimir PDF (Ctrl+P)",
         "viewer.present": "Modo Apresentacao (F5 / Ctrl+L)",
+        "viewer.share": "Compartilhar PDF como anexo",
+        "viewer.toggle_notes_vis": "Mostrar / ocultar notas na pagina (Ctrl+Shift+N)",
         "viewer.empty_dual": "Abra qualquer PDF ou Markdown local ou solte um arquivo aqui para ler.",
         "viewer.tool.select": "Selecionar",
-        "viewer.tool.highlight": "Realcar",
+        "viewer.tool.highlight": "Realcar texto",
+        "viewer.tool.free_highlight": "Realce livre",
         "viewer.tool.note": "Nota",
         "viewer.tool.ink": "Tinta",
         "viewer.tool.eraser": "Borracha",
@@ -376,6 +386,7 @@ class PdfTabPage(QWidget):
         for mode_id, i18n_key in (
             ("select", "viewer.tool.select"),
             ("highlight", "viewer.tool.highlight"),
+            ("free_highlight", "viewer.tool.free_highlight"),
             ("note", "viewer.tool.note"),
             ("ink", "viewer.tool.ink"),
             ("eraser", "viewer.tool.eraser"),
@@ -484,7 +495,7 @@ class PdfTabPage(QWidget):
             c.lookup_word_requested.connect(self.lookup_word_requested.emit)
             c.tool_mode_changed.connect(self._on_canvas_tool_mode_changed)
             c.touch_writing_changed.connect(self._on_canvas_touch_changed)
-            c.zoom_delta_requested.connect(lambda d: self.set_zoom(self.zoom + d))
+            c.zoom_delta_requested.connect(lambda d: self.set_zoom(self.zoom + (d * max(1.0, self.zoom * 0.55))))
             c.pan_delta_requested.connect(self._pan_scroll_by)
             if not self._continuous_scroll:
                 c.setVisible(idx == self.current_page)
@@ -921,7 +932,7 @@ class PdfTabPage(QWidget):
         self.page_words_ready.emit(words)
 
     def set_zoom(self, zoom: float) -> None:
-        self.zoom = max(0.4, min(3.0, round(float(zoom), 2)))
+        self.zoom = max(0.10, min(12.0, round(float(zoom), 2)))
         self._rendered_signatures.clear()
         for c in self._page_canvases:
             c.set_rotation_and_zoom(self.rotation, self.zoom)
@@ -933,6 +944,14 @@ class PdfTabPage(QWidget):
                 self._programmatic_scroll = False
         self.render_visible_pages()
         self.state_changed.emit()
+
+    def set_notes_visible(self, visible: bool) -> None:
+        want = bool(visible)
+        for c in self._page_canvases:
+            c.set_notes_visible(want)
+
+    def notes_visible(self) -> bool:
+        return bool(self._page_canvases and self._page_canvases[0].notes_visible())
 
     def fit_width(self) -> None:
         avail_w = max(240, self.scroll.viewport().width() - 64)
@@ -1062,6 +1081,7 @@ class PdfTabPage(QWidget):
         for mid, i18n_key in (
             ("select", "viewer.tool.select"),
             ("highlight", "viewer.tool.highlight"),
+            ("free_highlight", "viewer.tool.free_highlight"),
             ("note", "viewer.tool.note"),
             ("ink", "viewer.tool.ink"),
             ("eraser", "viewer.tool.eraser"),
@@ -1172,11 +1192,16 @@ class ViewerView(QWidget):
         self.print_btn.clicked.connect(self.open_print_dialog)
         bar_row.addWidget(self.print_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
+        self.share_btn = QPushButton("", bar_frame)
+        self.share_btn.setProperty("role", "GhostAction")
+        self.share_btn.clicked.connect(self.open_share_dialog)
+        bar_row.addWidget(self.share_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         bar_row.addWidget(self._make_v_sep(bar_frame))
 
         self.zoom_out_btn = QPushButton("", bar_frame)
         self.zoom_out_btn.setProperty("role", "GhostAction")
-        self.zoom_out_btn.clicked.connect(lambda: self._step_zoom(-0.15))
+        self.zoom_out_btn.clicked.connect(lambda: self._step_zoom(-1))
         bar_row.addWidget(self.zoom_out_btn)
 
         self.zoom_tag = StatusTag("115%", tone="accent", parent=bar_frame)
@@ -1184,7 +1209,7 @@ class ViewerView(QWidget):
 
         self.zoom_in_btn = QPushButton("", bar_frame)
         self.zoom_in_btn.setProperty("role", "GhostAction")
-        self.zoom_in_btn.clicked.connect(lambda: self._step_zoom(0.15))
+        self.zoom_in_btn.clicked.connect(lambda: self._step_zoom(1))
         bar_row.addWidget(self.zoom_in_btn)
 
         self.fit_btn = QPushButton("", bar_frame)
@@ -1211,6 +1236,13 @@ class ViewerView(QWidget):
         self.rotate_btn.setProperty("role", "GhostAction")
         self.rotate_btn.clicked.connect(self._rotate_page)
         bar_row.addWidget(self.rotate_btn)
+
+        self.toggle_notes_vis_btn = QPushButton("", bar_frame)
+        self.toggle_notes_vis_btn.setProperty("role", "GhostAction")
+        self.toggle_notes_vis_btn.setCheckable(True)
+        self.toggle_notes_vis_btn.setChecked(True)
+        self.toggle_notes_vis_btn.clicked.connect(lambda ch: self.set_notes_visible(bool(ch)))
+        bar_row.addWidget(self.toggle_notes_vis_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         bar_row.addStretch(1)
 
@@ -1328,6 +1360,7 @@ class ViewerView(QWidget):
         self.notes_panel.jump_to_note_requested.connect(self._jump_to_note)
         self.notes_panel.add_note_requested.connect(self._add_note_from_panel)
         self.notes_panel.delete_note_requested.connect(self._delete_note_from_panel)
+        self.notes_panel.notes_visibility_toggled.connect(self.set_notes_visible)
         self._body_row.addWidget(self.notes_panel)
 
         # Adobe-Style Right Vertical Tool Rail
@@ -1400,12 +1433,13 @@ class ViewerView(QWidget):
             ("F5", self.open_presentation_mode),
             ("Ctrl+L", self.open_presentation_mode),
             ("Ctrl+W", self.close_current_tab),
-            ("Ctrl++", lambda: self._step_zoom(0.15)),
-            ("Ctrl+=", lambda: self._step_zoom(0.15)),
-            ("Ctrl+-", lambda: self._step_zoom(-0.15)),
+            ("Ctrl++", lambda: self._step_zoom(1)),
+            ("Ctrl+=", lambda: self._step_zoom(1)),
+            ("Ctrl+-", lambda: self._step_zoom(-1)),
             ("Ctrl+0", self._fit_width),
             ("Ctrl+R", self._rotate_page),
             ("Ctrl+Z", self._undo_current),
+            ("Ctrl+Shift+N", self.toggle_notes_visible),
             ("PgDown", lambda: self._step_page(1)),
             ("PgUp", lambda: self._step_page(-1)),
             ("Home", self._jump_first_page),
@@ -1438,12 +1472,14 @@ class ViewerView(QWidget):
             (self.save_btn, _tv("viewer.save", self._lang)),
             (self.find_btn, _tv("viewer.find", self._lang)),
             (self.print_btn, _tv("viewer.print", self._lang)),
+            (self.share_btn, _tv("viewer.share", self._lang)),
             (self.zoom_out_btn, t("viewer.zoom_out", self._lang)),
             (self.zoom_in_btn, t("viewer.zoom_in", self._lang)),
             (self.fit_btn, t("viewer.fit_width", self._lang)),
             (self.prev_btn, t("viewer.prev", self._lang)),
             (self.next_btn, t("viewer.next", self._lang)),
             (self.rotate_btn, t("viewer.rotate", self._lang)),
+            (self.toggle_notes_vis_btn, _tv("viewer.toggle_notes_vis", self._lang)),
             (self.present_btn, _tv("viewer.present", self._lang)),
             (
                 self.fullscreen_btn,
@@ -1609,6 +1645,7 @@ class ViewerView(QWidget):
         self._sync_notes_panel()
         tab = self._current_tab()
         if isinstance(tab, PdfTabPage):
+            tab.set_notes_visible(self.toggle_notes_vis_btn.isChecked())
             tab.emit_current_page_words()
             self.active_document_changed.emit(tab.pdf_path)
         elif isinstance(tab, MarkdownTabPage):
@@ -1750,8 +1787,47 @@ class ViewerView(QWidget):
 
     def _step_zoom(self, delta: float) -> None:
         tab = self._current_tab()
-        if isinstance(tab, PdfTabPage):
+        if not isinstance(tab, PdfTabPage):
+            return
+        if abs(delta) >= 0.99:
+            sign = 1.0 if delta > 0 else -1.0
+            cur = tab.zoom
+            if cur < 1.0:
+                step = 0.10
+            elif cur < 2.5:
+                step = 0.25
+            elif cur < 5.0:
+                step = 0.50
+            else:
+                step = 1.00
+            tab.set_zoom(cur + sign * step)
+        else:
             tab.set_zoom(tab.zoom + delta)
+
+    def set_notes_visible(self, visible: bool) -> None:
+        want = bool(visible)
+        self.toggle_notes_vis_btn.blockSignals(True)
+        self.toggle_notes_vis_btn.setChecked(want)
+        self.toggle_notes_vis_btn.blockSignals(False)
+        p = get_palette(self._mode)
+        self.toggle_notes_vis_btn.setIcon(
+            load_svg_icon("eye" if want else "eye_off", color=p["icon_color"], size=16)
+        )
+        self.notes_panel.set_notes_visibility_state(want)
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.set_notes_visible(want)
+
+    def toggle_notes_visible(self) -> None:
+        self.set_notes_visible(not self.toggle_notes_vis_btn.isChecked())
+
+    def open_share_dialog(self) -> None:
+        tab = self._current_tab()
+        if tab is None:
+            return
+        doc_path = tab.pdf_path if isinstance(tab, PdfTabPage) else tab.md_path
+        dlg = ShareDocumentDialog(doc_path, mode=self._mode, parent=self)
+        dlg.exec()
 
     def _fit_width(self) -> None:
         tab = self._current_tab()
@@ -2067,6 +2143,8 @@ class ViewerView(QWidget):
             self.save_btn.setEnabled(False)
             self.find_btn.setEnabled(False)
             self.print_btn.setEnabled(False)
+            self.share_btn.setEnabled(False)
+            self.toggle_notes_vis_btn.setEnabled(False)
             self.present_btn.setEnabled(False)
             for b in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.prev_btn, self.next_btn, self.rotate_btn):
                 b.setEnabled(False)
@@ -2077,6 +2155,8 @@ class ViewerView(QWidget):
             self.save_btn.setEnabled(True)
             self.find_btn.setEnabled(True)
             self.print_btn.setEnabled(True)
+            self.share_btn.setEnabled(True)
+            self.toggle_notes_vis_btn.setEnabled(True)
             self.present_btn.setEnabled(True)
             for b in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.prev_btn, self.next_btn, self.rotate_btn):
                 b.setEnabled(True)
@@ -2086,6 +2166,8 @@ class ViewerView(QWidget):
             self.save_btn.setEnabled(True)
             self.find_btn.setEnabled(True)
             self.print_btn.setEnabled(False)
+            self.share_btn.setEnabled(True)
+            self.toggle_notes_vis_btn.setEnabled(False)
             self.present_btn.setEnabled(False)
             for b in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.prev_btn, self.next_btn, self.rotate_btn):
                 b.setEnabled(False)
@@ -2119,12 +2201,20 @@ class ViewerView(QWidget):
             self.save_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=16))
             self.find_btn.setIcon(load_svg_icon("search", color=p["icon_color"], size=16))
             self.print_btn.setIcon(load_svg_icon("printer", color=p["icon_color"], size=16))
+            self.share_btn.setIcon(load_svg_icon("share", color=p["icon_color"], size=16))
             self.zoom_out_btn.setIcon(load_svg_icon("zoom_out", color=p["icon_color"], size=16))
             self.zoom_in_btn.setIcon(load_svg_icon("zoom_in", color=p["icon_color"], size=16))
             self.fit_btn.setIcon(load_svg_icon("fit_width", color=p["icon_color"], size=16))
             self.prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=16))
             self.next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=16))
             self.rotate_btn.setIcon(load_svg_icon("rotate", color=p["icon_color"], size=16))
+            self.toggle_notes_vis_btn.setIcon(
+                load_svg_icon(
+                    "eye" if self.toggle_notes_vis_btn.isChecked() else "eye_off",
+                    color=p["icon_color"],
+                    size=16,
+                )
+            )
             self.present_btn.setIcon(load_svg_icon("presentation", color=p["icon_color"], size=16))
             self.find_prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=14))
             self.find_next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=14))

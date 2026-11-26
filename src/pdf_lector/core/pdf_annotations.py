@@ -50,6 +50,7 @@ class AnnotationRecord:
     stroke_width: float = 2.0
     opacity: float = 0.45
     category: str = "General"
+    anchor_pdf: tuple[float, float] | None = None
 
 
 def _pikepdf():
@@ -236,7 +237,9 @@ def _build_ap_stream(
 
     if kind == "ink":
         stroke_w = max(0.5, min(24.0, float(rec.stroke_width)))
-        cmds: list[str] = [f"q {stroke_w:.2f} w 1 J 1 j {r:.3f} {g:.3f} {b:.3f} RG"]
+        ca = max(0.15, min(1.0, float(rec.opacity)))
+        prefix = "q /GS1 gs " if ca < 0.95 else "q "
+        cmds: list[str] = [f"{prefix}{stroke_w:.2f} w 1 J 1 j {r:.3f} {g:.3f} {b:.3f} RG"]
         for stroke in rec.points_pdf:
             if len(stroke) < 2:
                 continue
@@ -251,6 +254,23 @@ def _build_ap_stream(
         ap["/Subtype"] = pikepdf.Name("/Form")
         ap["/BBox"] = pikepdf.Array([0.0, 0.0, w, h])
         ap["/Matrix"] = pikepdf.Array([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        if ca < 0.95:
+            ap["/Resources"] = pikepdf.Dictionary(
+                {
+                    "/ExtGState": pikepdf.Dictionary(
+                        {
+                            "/GS1": pikepdf.Dictionary(
+                                {
+                                    "/Type": pikepdf.Name("/ExtGState"),
+                                    "/ca": ca,
+                                    "/CA": ca,
+                                    "/BM": pikepdf.Name("/Multiply"),
+                                }
+                            )
+                        }
+                    )
+                }
+            )
         return pdf.make_indirect(ap)
 
     if kind == "freetext":
@@ -369,6 +389,15 @@ def load_pdf_annotations(pdf_path: Path | str) -> list[AnnotationRecord]:
                     except Exception:
                         opacity = 0.45
 
+                anchor_pdf: tuple[float, float] | None = None
+                if "/TRODAIAnchor" in annot:
+                    try:
+                        arr = annot["/TRODAIAnchor"]
+                        if len(arr) >= 2:
+                            anchor_pdf = (float(arr[0]), float(arr[1]))
+                    except Exception:
+                        anchor_pdf = None
+
                 records.append(
                     AnnotationRecord(
                         id=nm,
@@ -384,6 +413,7 @@ def load_pdf_annotations(pdf_path: Path | str) -> list[AnnotationRecord]:
                         stroke_width=stroke_width,
                         opacity=opacity,
                         category=category,
+                        anchor_pdf=anchor_pdf,
                     )
                 )
     except PermissionError:
@@ -510,6 +540,9 @@ def save_pdf_annotations(
                         d["/Name"] = pikepdf.Name("/Comment")
                         d["/Subj"] = sanitize_note_category(getattr(rec, "category", "General"))
                         d["/Open"] = False
+                        anchor = getattr(rec, "anchor_pdf", None)
+                        if anchor is not None and len(anchor) >= 2:
+                            d["/TRODAIAnchor"] = pikepdf.Array([float(anchor[0]), float(anchor[1])])
                     elif rec.kind == "ink":
                         ink_list = pikepdf.Array(
                             [
@@ -521,6 +554,7 @@ def save_pdf_annotations(
                             ]
                         )
                         d["/InkList"] = ink_list
+                        d["/CA"] = max(0.15, min(1.0, float(rec.opacity)))
                         d["/BS"] = pikepdf.Dictionary(
                             {"/W": max(0.5, min(24.0, float(rec.stroke_width))), "/S": pikepdf.Name("/S")}
                         )

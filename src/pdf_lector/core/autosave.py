@@ -44,6 +44,11 @@ def serialize_annotation(rec: AnnotationRecord) -> dict[str, object]:
         "stroke_width": float(rec.stroke_width),
         "opacity": float(rec.opacity),
         "category": sanitize_note_category(getattr(rec, "category", "General")),
+        "anchor_pdf": (
+            [float(rec.anchor_pdf[0]), float(rec.anchor_pdf[1])]
+            if getattr(rec, "anchor_pdf", None) is not None
+            else None
+        ),
     }
 
 
@@ -61,6 +66,13 @@ def deserialize_annotation(raw: dict[str, object]) -> AnnotationRecord:
     kind = str(raw.get("kind") or "text")
     if kind not in ("highlight", "text", "ink", "freetext", "popup"):
         kind = "text"
+    anchor_raw = raw.get("anchor_pdf")
+    anchor_pdf: tuple[float, float] | None = None
+    if isinstance(anchor_raw, (list, tuple)) and len(anchor_raw) >= 2:
+        try:
+            anchor_pdf = (float(anchor_raw[0]), float(anchor_raw[1]))
+        except Exception:
+            anchor_pdf = None
     return AnnotationRecord(
         id=str(raw.get("id") or "note-rec"),
         page_index=int(raw.get("page_index") or 0),
@@ -75,6 +87,7 @@ def deserialize_annotation(raw: dict[str, object]) -> AnnotationRecord:
         stroke_width=float(raw.get("stroke_width") or 2.0),
         opacity=float(raw.get("opacity") or 0.45),
         category=sanitize_note_category(str(raw.get("category") or "General")),
+        anchor_pdf=anchor_pdf,
     )
 
 

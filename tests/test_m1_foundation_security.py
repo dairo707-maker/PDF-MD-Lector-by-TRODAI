@@ -105,13 +105,13 @@ def _pump_until(predicate, timeout_s: float = 3.0) -> bool:
 def test_m1_branding_version_and_pyproject() -> None:
     assert APP_NAME == "PDF/MD Lector"
     assert APP_USER_MODEL_ID == "TRODAI.PDFMDLector"
-    assert __version__ == "0.3.0"
-    assert read_version() == "0.3.0"
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.3.0"
+    assert __version__ == "0.4.0"
+    assert read_version() == "0.4.0"
+    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.4.0"
 
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
-    assert project["version"] == "0.3.0"
+    assert project["version"] == "0.4.0"
     scripts = project["scripts"]
     assert scripts["pdf-md-lector"] == "pdf_lector.app:main"
     assert scripts["pdf-lector"] == "pdf_lector.app:main"

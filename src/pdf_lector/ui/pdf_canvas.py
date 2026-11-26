@@ -59,12 +59,13 @@ from .svg_icons import load_svg_icon
 from .widgets import AdaptiveButton
 
 CLASSIC_HIGHLIGHT_PALETTE = CLASSIC_HIGHLIGHT_COLORS
-VALID_TOOL_MODES = ("select", "highlight", "note", "ink", "eraser")
+VALID_TOOL_MODES = ("select", "highlight", "free_highlight", "note", "ink", "eraser")
 
 _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
     "es": {
         "dict.context_lookup": "Diccionario",
         "canvas.highlight": "Resaltar",
+        "canvas.free_highlight": "Resaltado libre",
         "canvas.add_note": "Nota adhesiva",
         "canvas.comment": "Comentar",
         "canvas.copy": "Copiar",
@@ -82,6 +83,7 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
     "en": {
         "dict.context_lookup": "Dictionary",
         "canvas.highlight": "Highlight",
+        "canvas.free_highlight": "Free highlight",
         "canvas.add_note": "Sticky note",
         "canvas.comment": "Comment",
         "canvas.copy": "Copy",
@@ -99,6 +101,7 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
     "pt": {
         "dict.context_lookup": "Dicionario",
         "canvas.highlight": "Realcar",
+        "canvas.free_highlight": "Realce livre",
         "canvas.add_note": "Nota adesiva",
         "canvas.comment": "Comentar",
         "canvas.copy": "Copiar",
@@ -180,9 +183,11 @@ class PdfCanvas(QWidget):
         self._mode = "dark"
         self._session: PdfDocumentSession | None = None
         self._page_index: int = 0
+        self._page_size_pdf: tuple[float, float] = (612.0, 792.0)
         self._zoom: float = 1.0
         self._rotation: int = 0
         self._rendered_pixmap: QPixmap | None = None
+        self._notes_visible: bool = True
 
         self._shared_state = shared_state or SharedAnnotationState()
         self._shared_state.listeners.append(self._on_shared_state_mutated)
@@ -199,6 +204,7 @@ class PdfCanvas(QWidget):
         self._last_stylus_ts: float = 0.0
         self._active_touch_stroke: list[tuple[float, float, float]] = []
         self._active_mouse_stroke: list[tuple[float, float, float]] = []
+        self._active_free_hl_stroke: list[tuple[float, float]] = []
         self._active_tablet_stroke: list[tuple[float, float, float]] = []
         self._prev_pinch_centroid: QPointF | None = None
         self._prev_pinch_dist: float | None = None
@@ -217,6 +223,10 @@ class PdfCanvas(QWidget):
         self._dragging_note_start_px: QPointF | None = None
         self._dragging_note_offset_pdf: tuple[float, float] = (0.0, 0.0)
         self._dragging_note_moved: bool = False
+        self._resizing_note_id: str | None = None
+        self._resizing_handle: str = ""
+        self._resizing_orig_rect: tuple[float, float, float, float] | None = None
+        self._hovered_note_id: str | None = None
         self._sticky_card: QFrame | None = None
         self._sticky_card_note_id: str | None = None
 
@@ -279,6 +289,12 @@ class PdfCanvas(QWidget):
     def set_session(self, session: PdfDocumentSession | None, page_index: int = 0) -> None:
         self._session = session
         self._page_index = max(0, int(page_index))
+        self._page_size_pdf = (612.0, 792.0)
+        if session is not None and 0 <= self._page_index < session.page_count:
+            try:
+                self._page_size_pdf = session.get_page_size(self._page_index)
+            except Exception:
+                self._page_size_pdf = (612.0, 792.0)
         self._selection_quads_pdf.clear()
         self._selected_text = ""
         self._selected_word = ""
@@ -288,35 +304,40 @@ class PdfCanvas(QWidget):
 
     def set_rotation_and_zoom(self, rotation: int, zoom: float) -> None:
         self._rotation = int(rotation) % 360
-        self._zoom = max(0.2, min(4.0, float(zoom)))
+        self._zoom = max(0.10, min(12.0, float(zoom)))
         self._sync_canvas_size()
         self.update()
 
     def set_rendered_image(self, image: QImage) -> None:
         pm = QPixmap.fromImage(image)
         self._rendered_pixmap = pm if not pm.isNull() else None
-        if self._rendered_pixmap is not None:
-            self.setFixedSize(self._rendered_pixmap.size())
-        else:
-            self._sync_canvas_size()
+        # Keep widget size strictly locked to PDF point size * zoom so scroll/highlights never shift!
         self.update()
 
     def _sync_canvas_size(self) -> None:
-        if self._rendered_pixmap is not None and not self._rendered_pixmap.isNull():
-            self.setFixedSize(self._rendered_pixmap.size())
-            return
+        w, h = self._page_size_pdf
         if self._session is not None and 0 <= self._page_index < self._session.page_count:
             try:
                 w, h = self._session.get_page_size(self._page_index)
-                if self._rotation in (90, 270):
-                    w, h = h, w
-                self.setFixedSize(
-                    QSize(max(120, int(round(w * self._zoom))), max(120, int(round(h * self._zoom))))
-                )
-                return
+                self._page_size_pdf = (float(w), float(h))
             except Exception:
                 pass
-        self.setFixedSize(QSize(612, 792))
+        if self._rotation in (90, 270):
+            w, h = h, w
+        self.setFixedSize(
+            QSize(max(60, int(round(w * self._zoom))), max(60, int(round(h * self._zoom))))
+        )
+
+    def notes_visible(self) -> bool:
+        return self._notes_visible
+
+    def set_notes_visible(self, visible: bool) -> None:
+        want = bool(visible)
+        if want != self._notes_visible:
+            self._notes_visible = want
+            if not want:
+                self.hide_sticky_card()
+            self.update()
 
     def load_annotations(self, records: Sequence[AnnotationRecord]) -> None:
         self._annotations = list(records)
@@ -339,7 +360,7 @@ class PdfCanvas(QWidget):
             clean = "select"
         if clean != self._tool_mode:
             self._tool_mode = clean
-            if clean == "ink":
+            if clean in ("ink", "free_highlight"):
                 self.setCursor(Qt.CursorShape.CrossCursor)
             elif clean == "highlight":
                 self.setCursor(Qt.CursorShape.IBeamCursor)
@@ -413,13 +434,22 @@ class PdfCanvas(QWidget):
         *,
         color_hex: str = DEFAULT_HIGHLIGHT_COLOR,
         category: str = "General",
+        anchor_pdf: tuple[float, float] | None = None,
+        size_pdf: tuple[float, float] = (148.0, 74.0),
     ) -> AnnotationRecord:
         px, py = float(pos_pdf[0]), float(pos_pdf[1])
+        w_pdf = max(48.0, float(size_pdf[0]))
+        h_pdf = max(32.0, float(size_pdf[1]))
+        anchor = (
+            (float(anchor_pdf[0]), float(anchor_pdf[1]))
+            if anchor_pdf is not None
+            else (px, py)
+        )
         rec = AnnotationRecord(
             id=f"note-{uuid.uuid4().hex[:8]}",
             page_index=self._page_index,
             kind="text",
-            rect_pdf=(px, py, px + 24.0, py + 24.0),
+            rect_pdf=(px, py, px + w_pdf, py + h_pdf),
             points_pdf=(),
             color_hex=sanitize_color_hex(color_hex, DEFAULT_HIGHLIGHT_COLOR),
             author=self.active_author(),
@@ -427,6 +457,7 @@ class PdfCanvas(QWidget):
             content=content,
             parent_id=None,
             category=sanitize_note_category(category),
+            anchor_pdf=anchor,
         )
         self._annotations.append(rec)
         self._undo_stack.append(("add", rec))
@@ -446,7 +477,33 @@ class PdfCanvas(QWidget):
         w = max(20.0, rec.rect_pdf[2] - rec.rect_pdf[0])
         h = max(20.0, rec.rect_pdf[3] - rec.rect_pdf[1])
         nx, ny = float(new_pos_pdf[0]), float(new_pos_pdf[1])
+        if rec.anchor_pdf is None:
+            rec.anchor_pdf = (rec.rect_pdf[0], rec.rect_pdf[1])
         rec.rect_pdf = (nx, ny, nx + w, ny + h)
+        self._dirty = True
+        self._shared_state.notify()
+        self.annotations_changed.emit()
+        self.update()
+        return rec
+
+    def resize_sticky_note(
+        self,
+        note_id: str,
+        new_rect_pdf: tuple[float, float, float, float],
+    ) -> AnnotationRecord | None:
+        rec = self.find_annotation(note_id)
+        if rec is None:
+            return None
+        x0, y0, x1, y1 = (float(v) for v in new_rect_pdf)
+        nx0, nx1 = min(x0, x1), max(x0, x1)
+        ny0, ny1 = min(y0, y1), max(y0, y1)
+        if (nx1 - nx0) < 56.0:
+            nx1 = nx0 + 56.0
+        if (ny1 - ny0) < 36.0:
+            ny1 = ny0 + 36.0
+        nx1 = min(nx0 + 420.0, nx1)
+        ny1 = min(ny0 + 360.0, ny1)
+        rec.rect_pdf = (nx0, ny0, nx1, ny1)
         self._dirty = True
         self._shared_state.notify()
         self.annotations_changed.emit()
@@ -576,6 +633,56 @@ class PdfCanvas(QWidget):
         self.update()
         return rec
 
+    def record_free_highlight_stroke(
+        self,
+        points: Sequence[tuple[float, float] | tuple[float, float, float]],
+        *,
+        color_hex: str | None = None,
+        stroke_width: float = 12.0,
+        opacity: float = 0.42,
+    ) -> AnnotationRecord | None:
+        """Record a freehand pointer highlighter stroke saved as translucent ISO 32000 /Ink."""
+        if len(points) < 2:
+            return None
+        stroke_pts: list[tuple[float, ...]] = []
+        total_len = 0.0
+        prev_xy: tuple[float, float] | None = None
+        for pt in points:
+            x, y = float(pt[0]), float(pt[1])
+            stroke_pts.append((x, y))
+            if prev_xy is not None:
+                total_len += math.hypot(x - prev_xy[0], y - prev_xy[1])
+            prev_xy = (x, y)
+        if total_len < 1e-3:
+            return None
+
+        w = max(4.0, min(24.0, float(stroke_width)))
+        ca = max(0.18, min(0.75, float(opacity)))
+        xs = [p[0] for p in stroke_pts]
+        ys = [p[1] for p in stroke_pts]
+        pad = max(2.0, w * 0.5)
+        rec = AnnotationRecord(
+            id=f"fhl-{uuid.uuid4().hex[:8]}",
+            page_index=self._page_index,
+            kind="ink",
+            rect_pdf=(min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad),
+            points_pdf=[stroke_pts],
+            color_hex=sanitize_color_hex(color_hex or self._active_color, DEFAULT_HIGHLIGHT_COLOR),
+            author=self.active_author(),
+            timestamp_iso=_utc_now_iso(),
+            content="",
+            parent_id=None,
+            stroke_width=w,
+            opacity=ca,
+        )
+        self._annotations.append(rec)
+        self._undo_stack.append(("add", rec))
+        self._dirty = True
+        self._shared_state.notify()
+        self.annotations_changed.emit()
+        self.update()
+        return rec
+
     @property
     def touch_writing_enabled(self) -> bool:
         return self._touch_writing_enabled
@@ -591,38 +698,48 @@ class PdfCanvas(QWidget):
         if self._stylus_in_proximity:
             self._last_stylus_ts = time.monotonic()
 
+    def _effective_scale(self) -> float:
+        pw, ph = self._page_size_pdf
+        rot_w = ph if self._rotation in (90, 270) else pw
+        if self.width() > 0 and rot_w > 1.0:
+            return max(0.05, float(self.width()) / float(rot_w))
+        return max(0.05, self._zoom)
+
     def _screen_to_pdf(self, sx: float, sy: float) -> tuple[float, float]:
+        eff = self._effective_scale()
         if self._session is not None and 0 <= self._page_index < self._session.page_count:
             try:
                 return self._session.screen_to_pdf_point(
-                    self._page_index, sx, sy, scale=self._zoom, rotation=self._rotation
+                    self._page_index, sx, sy, scale=eff, rotation=self._rotation
                 )
             except Exception:
                 pass
-        return (sx / max(0.05, self._zoom), sy / max(0.05, self._zoom))
+        return (sx / eff, sy / eff)
 
     def _pdf_to_screen_rect(self, rect_pdf: tuple[float, float, float, float]) -> QRectF:
+        eff = self._effective_scale()
         if self._session is not None and 0 <= self._page_index < self._session.page_count:
             try:
                 sx0, sy0, sx1, sy1 = self._session.pdf_to_screen_rect(
-                    self._page_index, rect_pdf, scale=self._zoom, rotation=self._rotation
+                    self._page_index, rect_pdf, scale=eff, rotation=self._rotation
                 )
                 return QRectF(sx0, sy0, max(2.0, sx1 - sx0), max(2.0, sy1 - sy0))
             except Exception:
                 pass
         x0, y0, x1, y1 = rect_pdf
-        return QRectF(x0 * self._zoom, y0 * self._zoom, max(2.0, (x1 - x0) * self._zoom), max(2.0, (y1 - y0) * self._zoom))
+        return QRectF(x0 * eff, y0 * eff, max(2.0, (x1 - x0) * eff), max(2.0, (y1 - y0) * eff))
 
     def _pdf_to_screen_point(self, x_pdf: float, y_pdf: float) -> QPointF:
+        eff = self._effective_scale()
         if self._session is not None and 0 <= self._page_index < self._session.page_count:
             try:
                 sx, sy = self._session.pdf_to_screen_point(
-                    self._page_index, x_pdf, y_pdf, scale=self._zoom, rotation=self._rotation
+                    self._page_index, x_pdf, y_pdf, scale=eff, rotation=self._rotation
                 )
                 return QPointF(sx, sy)
             except Exception:
                 pass
-        return QPointF(x_pdf * self._zoom, y_pdf * self._zoom)
+        return QPointF(x_pdf * eff, y_pdf * eff)
 
     def handle_touch_points(
         self,
@@ -731,6 +848,8 @@ class PdfCanvas(QWidget):
             rec = self._annotations[idx]
             if rec.page_index != self._page_index:
                 continue
+            if not self._notes_visible and rec.kind in ("text", "freetext", "popup"):
+                continue
             hit = False
             if rec.kind == "ink" and rec.points_pdf:
                 for stroke in rec.points_pdf:
@@ -754,6 +873,41 @@ class PdfCanvas(QWidget):
                     hit = True
             if hit:
                 return (idx, rec)
+        return None
+
+    def _note_handle_points(self, sr: QRectF) -> dict[str, QPointF]:
+        cx = sr.center().x()
+        cy = sr.center().y()
+        return {
+            "nw": QPointF(sr.left(), sr.top()),
+            "n": QPointF(cx, sr.top()),
+            "ne": QPointF(sr.right(), sr.top()),
+            "e": QPointF(sr.right(), cy),
+            "se": QPointF(sr.right(), sr.bottom()),
+            "s": QPointF(cx, sr.bottom()),
+            "sw": QPointF(sr.left(), sr.bottom()),
+            "w": QPointF(sr.left(), cy),
+        }
+
+    def _note_resize_handle_at(self, pos_px: QPointF) -> tuple[str, str] | None:
+        if not self._notes_visible or self._tool_mode not in ("select", "note"):
+            return None
+        for rec in reversed(self._annotations):
+            if rec.page_index != self._page_index or rec.kind != "text":
+                continue
+            sr = self._pdf_to_screen_rect(rec.rect_pdf)
+            handles = self._note_handle_points(sr)
+            if sr.width() < 36.0 or sr.height() < 28.0:
+                se_pt = handles["se"]
+                if (
+                    math.hypot(pos_px.x() - se_pt.x(), pos_px.y() - se_pt.y()) <= 6.5
+                    and math.hypot(pos_px.x() - sr.center().x(), pos_px.y() - sr.center().y()) >= 6.0
+                ):
+                    return (rec.id, "se")
+                continue
+            for name, pt in handles.items():
+                if math.hypot(pos_px.x() - pt.x(), pos_px.y() - pt.y()) <= 8.0:
+                    return (rec.id, name)
         return None
 
     def erase_annotation_at(
@@ -818,9 +972,14 @@ class PdfCanvas(QWidget):
         card = QFrame(self)
         card.setObjectName("StickyNoteCard")
         card.setFixedWidth(258)
+        card_bg = "#0F172A" if self._mode == "dark" else "#FFFFFF"
+        editor_bg = "#111C2E" if self._mode == "dark" else "#F8FAFC"
+        fg_col = "#F8FAFC" if self._mode == "dark" else "#0F172A"
+        muted_col = "#94A3B8" if self._mode == "dark" else "#475569"
+        bd_col = "#334155" if self._mode == "dark" else "#CBD5E1"
         card.setStyleSheet(
-            f"QFrame#StickyNoteCard {{ background-color: {p['bg_menu']}; color: {p['text_primary']}; "
-            f"border: 1px solid {p['border_strong']}; border-top: 4px solid {card_color}; }}"
+            f"QFrame#StickyNoteCard {{ background-color: {card_bg}; color: {fg_col}; "
+            f"border: 1px solid {bd_col}; border-top: 4px solid {card_color}; }}"
         )
 
         root = QVBoxLayout(card)
@@ -831,6 +990,9 @@ class PdfCanvas(QWidget):
         hdr = QHBoxLayout()
         hdr.setSpacing(4)
         cat_combo = QComboBox(card)
+        cat_combo.setStyleSheet(
+            f"QComboBox {{ background-color: {editor_bg}; color: {fg_col}; border: 1px solid {bd_col}; padding: 3px 6px; }}"
+        )
         for cat in NOTE_CATEGORIES:
             cat_combo.addItem(cat, cat)
         cur_cat = sanitize_note_category(getattr(rec, "category", "General"))
@@ -891,8 +1053,8 @@ class PdfCanvas(QWidget):
                 self.update_sticky_note(nid, color_hex=c_val)
                 if shiboken6.isValid(c_frame):
                     c_frame.setStyleSheet(
-                        f"QFrame#StickyNoteCard {{ background-color: {p['bg_menu']}; color: {p['text_primary']}; "
-                        f"border: 1px solid {p['border_strong']}; border-top: 4px solid {c_val}; }}"
+                        f"QFrame#StickyNoteCard {{ background-color: {card_bg}; color: {fg_col}; "
+                        f"border: 1px solid {bd_col}; border-top: 4px solid {c_val}; }}"
                     )
 
             sw.clicked.connect(_pick_color)
@@ -900,10 +1062,14 @@ class PdfCanvas(QWidget):
         swatch_row.addStretch(1)
         root.addLayout(swatch_row)
 
-        # Live editable content
+        # Live editable content (explicit dark/light foreground so text is always crisp)
         editor = QTextEdit(card)
         editor.setObjectName("StickyNoteEditor")
         editor.setFixedHeight(92)
+        editor.setStyleSheet(
+            f"QTextEdit#StickyNoteEditor {{ background-color: {editor_bg}; color: {fg_col}; "
+            f"border: 1px solid {bd_col}; padding: 6px; }}"
+        )
         editor.setPlaceholderText(_tc("note.placeholder", self._lang))
         editor.setPlainText(rec.content or "")
         editor.textChanged.connect(
@@ -914,7 +1080,7 @@ class PdfCanvas(QWidget):
         ts_str = (rec.timestamp_iso or "")[:16].replace("T", " ")
         meta_lbl = QLabel(f"{rec.author}  {ts_str}".strip(), card)
         meta_lbl.setFont(QFont(MONO_FONT_FAMILY, 8))
-        meta_lbl.setProperty("tone", "muted")
+        meta_lbl.setStyleSheet(f"color: {muted_col}; background: transparent; border: none;")
         root.addWidget(meta_lbl)
 
         card.adjustSize()
@@ -1000,7 +1166,11 @@ class PdfCanvas(QWidget):
                 _tc("canvas.note_prompt", self._lang),
             )
             if ok and txt.strip():
-                self.add_sticky_note((anchor_rect[0], anchor_rect[1]), txt.strip())
+                ax = (anchor_rect[0] + anchor_rect[2]) * 0.5
+                ay = (anchor_rect[1] + anchor_rect[3]) * 0.5
+                nx = min(max(8.0, anchor_rect[2] + 14.0), max(8.0, self._page_size_pdf[0] - 156.0))
+                ny = max(8.0, anchor_rect[1] - 28.0)
+                self.add_sticky_note((nx, ny), txt.strip(), anchor_pdf=(ax, ay))
             QTimer.singleShot(0, self._hide_popover)
 
         note_btn.clicked.connect(_on_note)
@@ -1195,7 +1365,19 @@ class PdfCanvas(QWidget):
             pos = event.position()
             x_pdf, y_pdf = self._screen_to_pdf(pos.x(), pos.y())
 
-            if self._tool_mode in ("select", "note"):
+            resize_hit = self._note_resize_handle_at(pos)
+            if resize_hit is not None:
+                nid, handle = resize_hit
+                rec = self.find_annotation(nid)
+                if rec is not None:
+                    self._resizing_note_id = nid
+                    self._resizing_handle = handle
+                    self._resizing_orig_rect = rec.rect_pdf
+                    self.hide_sticky_card()
+                    event.accept()
+                    return
+
+            if self._notes_visible and self._tool_mode in ("select", "note"):
                 hit = self._annotation_at(x_pdf, y_pdf, radius_pdf=6.0)
                 if hit is not None and hit[1].kind == "text":
                     rec = hit[1]
@@ -1206,6 +1388,11 @@ class PdfCanvas(QWidget):
                     event.accept()
                     return
 
+            if self._tool_mode == "free_highlight":
+                self._active_free_hl_stroke = [(x_pdf, y_pdf)]
+                self.update()
+                event.accept()
+                return
             if self._tool_mode == "ink":
                 self._active_mouse_stroke = [(x_pdf, y_pdf, 0.55)]
                 self.update()
@@ -1217,10 +1404,10 @@ class PdfCanvas(QWidget):
                 return
             if self._tool_mode == "note":
                 if QApplication.platformName() == "offscreen":
-                    rec = self.add_sticky_note((x_pdf, y_pdf), "Nota rapida")
+                    rec = self.add_sticky_note((x_pdf, y_pdf), "Nota rapida", anchor_pdf=(x_pdf, y_pdf))
                     self.open_sticky_note_card(rec.id)
                 else:
-                    rec = self.add_sticky_note((x_pdf, y_pdf), "")
+                    rec = self.add_sticky_note((x_pdf, y_pdf), "", anchor_pdf=(x_pdf, y_pdf))
                     self.open_sticky_note_card(rec.id)
                 event.accept()
                 return
@@ -1236,6 +1423,27 @@ class PdfCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
         x_pdf, y_pdf = self._screen_to_pdf(pos.x(), pos.y())
+        if (event.buttons() & Qt.MouseButton.LeftButton) and self._resizing_note_id is not None and self._resizing_orig_rect is not None:
+            sr = self._pdf_to_screen_rect(self._resizing_orig_rect)
+            left, top, right, bottom = sr.left(), sr.top(), sr.right(), sr.bottom()
+            h = self._resizing_handle
+            min_w, min_h = 44.0, 28.0
+            if "w" in h:
+                left = min(right - min_w, pos.x())
+            if "e" in h:
+                right = max(left + min_w, pos.x())
+            if "n" in h:
+                top = min(bottom - min_h, pos.y())
+            if "s" in h:
+                bottom = max(top + min_h, pos.y())
+            p0 = self._screen_to_pdf(left, top)
+            p1 = self._screen_to_pdf(right, bottom)
+            self.resize_sticky_note(
+                self._resizing_note_id,
+                (min(p0[0], p1[0]), min(p0[1], p1[1]), max(p0[0], p1[0]), max(p0[1], p1[1])),
+            )
+            event.accept()
+            return
         if (event.buttons() & Qt.MouseButton.LeftButton) and self._dragging_note_id is not None:
             if self._dragging_note_start_px is not None:
                 dist = math.hypot(
@@ -1248,6 +1456,13 @@ class PdfCanvas(QWidget):
             if self._dragging_note_moved:
                 ox, oy = self._dragging_note_offset_pdf
                 self.move_sticky_note(self._dragging_note_id, (x_pdf - ox, y_pdf - oy))
+            event.accept()
+            return
+        if (event.buttons() & Qt.MouseButton.LeftButton) and self._tool_mode == "free_highlight" and self._active_free_hl_stroke:
+            lx, ly = self._active_free_hl_stroke[-1]
+            if math.hypot(x_pdf - lx, y_pdf - ly) >= 1.5:
+                self._active_free_hl_stroke.append((x_pdf, y_pdf))
+                self.update()
             event.accept()
             return
         if (event.buttons() & Qt.MouseButton.LeftButton) and self._tool_mode == "ink" and self._active_mouse_stroke:
@@ -1274,16 +1489,43 @@ class PdfCanvas(QWidget):
                 self._selection_quads_pdf = quads
                 self._selected_word = sel_text.split()[0] if sel_text.split() else ""
                 self.update()
-        elif not (event.buttons() & Qt.MouseButton.LeftButton) and self._tool_mode == "select":
-            hit = self._annotation_at(x_pdf, y_pdf, radius_pdf=6.0)
-            if hit is not None and hit[1].kind == "text":
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
+        elif not (event.buttons() & Qt.MouseButton.LeftButton) and self._tool_mode in ("select", "note"):
+            r_hit = self._note_resize_handle_at(pos)
+            if r_hit is not None:
+                nid, handle = r_hit
+                self._hovered_note_id = nid
+                cursor_map = {
+                    "nw": Qt.CursorShape.SizeFDiagCursor,
+                    "se": Qt.CursorShape.SizeFDiagCursor,
+                    "ne": Qt.CursorShape.SizeBDiagCursor,
+                    "sw": Qt.CursorShape.SizeBDiagCursor,
+                    "n": Qt.CursorShape.SizeVerCursor,
+                    "s": Qt.CursorShape.SizeVerCursor,
+                    "e": Qt.CursorShape.SizeHorCursor,
+                    "w": Qt.CursorShape.SizeHorCursor,
+                }
+                self.setCursor(cursor_map.get(handle, Qt.CursorShape.SizeAllCursor))
             else:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
+                hit = self._annotation_at(x_pdf, y_pdf, radius_pdf=6.0) if self._notes_visible else None
+                if hit is not None and hit[1].kind == "text":
+                    self._hovered_note_id = hit[1].id
+                    self.setCursor(Qt.CursorShape.PointingHandCursor)
+                else:
+                    if self._hovered_note_id is not None:
+                        self._hovered_note_id = None
+                        self.update()
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._resizing_note_id is not None:
+                self._resizing_note_id = None
+                self._resizing_handle = ""
+                self._resizing_orig_rect = None
+                self.update()
+                event.accept()
+                return
             if self._dragging_note_id is not None:
                 nid = self._dragging_note_id
                 moved = self._dragging_note_moved
@@ -1294,6 +1536,12 @@ class PdfCanvas(QWidget):
                     self.open_sticky_note_card(nid)
                 event.accept()
                 return
+            if self._tool_mode == "free_highlight" and self._active_free_hl_stroke:
+                stroke = list(self._active_free_hl_stroke)
+                self._active_free_hl_stroke.clear()
+                self.record_free_highlight_stroke(stroke)
+                event.accept()
+                return
             if self._tool_mode == "ink" and self._active_mouse_stroke:
                 stroke = list(self._active_mouse_stroke)
                 self._active_mouse_stroke.clear()
@@ -1301,13 +1549,19 @@ class PdfCanvas(QWidget):
                 event.accept()
                 return
             if self._drag_start_pdf is not None:
+                sx0, sy0 = self._drag_start_pdf
                 self._drag_start_pdf = None
-                if self._tool_mode == "highlight" and self._selection_quads_pdf:
-                    for qrect in self._selection_quads_pdf:
-                        self.add_highlight_rect(qrect, color_hex=self._active_color)
-                    self._selection_quads_pdf.clear()
+                pos = event.position()
+                ex_pdf, ey_pdf = self._screen_to_pdf(pos.x(), pos.y())
+                if self._tool_mode == "highlight":
+                    if self._selection_quads_pdf:
+                        for qrect in self._selection_quads_pdf:
+                            self.add_highlight_rect(qrect, color_hex=self._active_color)
+                        self._selection_quads_pdf.clear()
+                    elif math.hypot(ex_pdf - sx0, ey_pdf - sy0) >= 8.0:
+                        self.add_highlight_rect((sx0, sy0, ex_pdf, ey_pdf), color_hex=self._active_color)
                 elif self._selected_word:
-                    self._show_kindle_popover(self._selected_word, event.position().toPoint())
+                    self._show_kindle_popover(self._selected_word, pos.toPoint())
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -1318,7 +1572,7 @@ class PdfCanvas(QWidget):
                     self._page_index,
                     pos.x(),
                     pos.y(),
-                    scale=self._zoom,
+                    scale=self._effective_scale(),
                     rotation=self._rotation,
                 )
             except Exception:
@@ -1342,7 +1596,7 @@ class PdfCanvas(QWidget):
                     self._page_index,
                     float(event.pos().x()),
                     float(event.pos().y()),
-                    scale=self._zoom,
+                    scale=self._effective_scale(),
                     rotation=self._rotation,
                 )
                 if hit is not None:
@@ -1374,7 +1628,7 @@ class PdfCanvas(QWidget):
                 _tc("canvas.note_prompt", self._lang),
             )
             if ok and txt.strip():
-                self.add_sticky_note((x_pdf, y_pdf), txt.strip())
+                self.add_sticky_note((x_pdf, y_pdf), txt.strip(), anchor_pdf=(x_pdf, y_pdf))
 
         note_act.triggered.connect(_prompt_note)
 
@@ -1404,11 +1658,12 @@ class PdfCanvas(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-        # Crisp white paper sheet
+        # Crisp white paper sheet scaled 1:1 to widget rect (zero drift on scroll/zoom)
         painter.fillRect(self.rect(), QColor("#FFFFFF"))
         if self._rendered_pixmap is not None and not self._rendered_pixmap.isNull():
-            painter.drawPixmap(0, 0, self._rendered_pixmap)
+            painter.drawPixmap(self.rect(), self._rendered_pixmap)
 
         # In-PDF search matches (Ctrl+F)
         if self._search_rects_pdf:
@@ -1430,29 +1685,66 @@ class PdfCanvas(QWidget):
             for quad in self._selection_quads_pdf:
                 painter.drawRect(self._pdf_to_screen_rect(quad))
 
-        # Committed annotations for current page
+        eff_scale = self._effective_scale()
+
+        # Highlight rectangles and translucent freehand highlights (Multiply preserves dark text crisp)
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
         for rec in self._annotations:
             if rec.page_index != self._page_index:
                 continue
             col = QColor(sanitize_color_hex(rec.color_hex))
             if rec.kind == "highlight":
                 fill = QColor(col)
-                fill.setAlpha(110)
+                fill.setAlpha(135)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(fill)
                 painter.drawRect(self._pdf_to_screen_rect(rec.rect_pdf))
-            elif rec.kind == "text":
-                sr = self._pdf_to_screen_rect(rec.rect_pdf)
-                painter.setPen(QPen(QColor("#334155"), 1))
-                painter.setBrush(col)
-                painter.drawRect(sr)
-                painter.drawLine(
-                    int(sr.left() + 4),
-                    int(sr.top() + sr.height() * 0.4),
-                    int(sr.right() - 4),
-                    int(sr.top() + sr.height() * 0.4),
+            elif rec.kind == "ink" and float(rec.opacity) < 0.95:
+                stroke_col = QColor(col)
+                stroke_col.setAlpha(int(max(40, min(210, round(float(rec.opacity) * 255)))))
+                pen = QPen(
+                    stroke_col,
+                    max(4.0, rec.stroke_width * eff_scale),
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
                 )
-            elif rec.kind == "ink":
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                for stroke in rec.points_pdf:
+                    if len(stroke) < 2:
+                        continue
+                    path = QPainterPath(self._pdf_to_screen_point(float(stroke[0][0]), float(stroke[0][1])))
+                    for pt in stroke[1:]:
+                        path.lineTo(self._pdf_to_screen_point(float(pt[0]), float(pt[1])))
+                    painter.drawPath(path)
+
+        if len(self._active_free_hl_stroke) >= 2:
+            fhl_col = QColor(sanitize_color_hex(self._active_color))
+            fhl_col.setAlpha(115)
+            painter.setPen(
+                QPen(
+                    fhl_col,
+                    max(4.0, 12.0 * eff_scale),
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            f_path = QPainterPath(self._pdf_to_screen_point(self._active_free_hl_stroke[0][0], self._active_free_hl_stroke[0][1]))
+            for pt in self._active_free_hl_stroke[1:]:
+                f_path.lineTo(self._pdf_to_screen_point(pt[0], pt[1]))
+            painter.drawPath(f_path)
+        painter.restore()
+
+        # Opaque ink strokes + visible sticky notes / guide lines / resize handles + popups
+        for rec in self._annotations:
+            if rec.page_index != self._page_index:
+                continue
+            col = QColor(sanitize_color_hex(rec.color_hex))
+            if rec.kind == "ink" and float(rec.opacity) >= 0.95:
                 for stroke in rec.points_pdf:
                     if len(stroke) < 2:
                         continue
@@ -1462,14 +1754,85 @@ class PdfCanvas(QWidget):
                         pressure = float(stroke[idx][2]) if len(stroke[idx]) >= 3 else 0.6
                         pen = QPen(
                             col,
-                            max(1.0, rec.stroke_width * self._zoom * (0.6 + 0.8 * pressure)),
+                            max(1.0, rec.stroke_width * eff_scale * (0.6 + 0.8 * pressure)),
                             Qt.PenStyle.SolidLine,
                             Qt.PenCapStyle.RoundCap,
                             Qt.PenJoinStyle.RoundJoin,
                         )
                         painter.setPen(pen)
                         painter.drawLine(p0, p1)
-            elif rec.kind in ("freetext", "popup"):
+            elif rec.kind == "text" and self._notes_visible:
+                sr = self._pdf_to_screen_rect(rec.rect_pdf)
+                # Subtle guide line from note card edge to text anchor
+                anchor = getattr(rec, "anchor_pdf", None)
+                if anchor is not None and len(anchor) >= 2:
+                    ap = self._pdf_to_screen_point(float(anchor[0]), float(anchor[1]))
+                    cx = max(sr.left(), min(sr.right(), ap.x()))
+                    cy = max(sr.top(), min(sr.bottom(), ap.y()))
+                    if math.hypot(ap.x() - cx, ap.y() - cy) > 3.0:
+                        guide_pen = QPen(QColor(100, 116, 139, 110), 1.0, Qt.PenStyle.DashLine)
+                        painter.setPen(guide_pen)
+                        painter.drawLine(QPointF(cx, cy), ap)
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        dot_col = QColor(col)
+                        dot_col.setAlpha(200)
+                        painter.setBrush(dot_col)
+                        painter.drawRect(QRectF(ap.x() - 2.0, ap.y() - 2.0, 4.0, 4.0))
+
+                if sr.width() >= 48.0 and sr.height() >= 30.0:
+                    bg = QColor(
+                        (255 * 4 + col.red()) // 5,
+                        (255 * 4 + col.green()) // 5,
+                        (255 * 4 + col.blue()) // 5,
+                        245,
+                    )
+                    painter.setPen(QPen(QColor("#334155"), 1.0))
+                    painter.setBrush(bg)
+                    painter.drawRect(sr)
+
+                    hdr_h = min(18.0, sr.height() * 0.30)
+                    hdr_rect = QRectF(sr.left(), sr.top(), sr.width(), hdr_h)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(col)
+                    painter.drawRect(hdr_rect)
+
+                    cat_lbl = sanitize_note_category(getattr(rec, "category", "General"))
+                    painter.setPen(QColor("#0F172A"))
+                    painter.setFont(QFont(UI_FONT_FAMILY, 7, QFont.Weight.Bold))
+                    painter.drawText(
+                        hdr_rect.adjusted(5.0, 0.0, -4.0, 0.0),
+                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                        cat_lbl,
+                    )
+
+                    body_txt = (rec.content or "").strip() or "..."
+                    painter.setFont(QFont(UI_FONT_FAMILY, 8))
+                    painter.drawText(
+                        sr.adjusted(5.0, hdr_h + 3.0, -5.0, -4.0),
+                        Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+                        body_txt,
+                    )
+
+                    # Square polygonal resize handle points at corners (and edges when hovered/active)
+                    handles = self._note_handle_points(sr)
+                    show_edges = (rec.id == self._hovered_note_id or rec.id == self._resizing_note_id)
+                    keys = handles.keys() if show_edges else ("nw", "ne", "se", "sw")
+                    painter.setPen(QPen(QColor("#0F172A"), 1.0))
+                    painter.setBrush(QColor("#FFFFFF"))
+                    for k in keys:
+                        hp = handles[k]
+                        painter.drawRect(QRectF(hp.x() - 2.5, hp.y() - 2.5, 5.0, 5.0))
+                else:
+                    painter.setPen(QPen(QColor("#334155"), 1))
+                    painter.setBrush(col)
+                    painter.drawRect(sr)
+                    painter.drawLine(
+                        int(sr.left() + 4),
+                        int(sr.top() + sr.height() * 0.4),
+                        int(sr.right() - 4),
+                        int(sr.top() + sr.height() * 0.4),
+                    )
+            elif rec.kind in ("freetext", "popup") and self._notes_visible:
                 sr = self._pdf_to_screen_rect(rec.rect_pdf)
                 painter.setPen(QPen(col, 1))
                 painter.setBrush(QColor("#FFFFFF" if rec.kind == "freetext" else "#FEF9C3"))
@@ -1478,12 +1841,12 @@ class PdfCanvas(QWidget):
                     painter.setPen(QColor("#0F172A"))
                     painter.drawText(sr.adjusted(4, 2, -4, -2), Qt.TextFlag.TextWordWrap, rec.content)
 
-        # In-progress strokes
+        # In-progress opaque ink strokes
         for active in (self._active_tablet_stroke, self._active_mouse_stroke, self._active_touch_stroke):
             if len(active) >= 2:
                 pen = QPen(
                     QColor(self._ink_color),
-                    max(1.2, self._ink_width * self._zoom),
+                    max(1.2, self._ink_width * eff_scale),
                     Qt.PenStyle.SolidLine,
                     Qt.PenCapStyle.RoundCap,
                     Qt.PenJoinStyle.RoundJoin,

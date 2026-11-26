@@ -35,6 +35,7 @@ _NOTES_TEXTS: dict[str, dict[str, str]] = {
     "es": {
         "title": "Notas del documento",
         "close": "Cerrar panel",
+        "toggle_vis": "Mostrar / ocultar notas en la pagina",
         "new_note": "+ Nueva nota",
         "search_placeholder": "Buscar en notas o categoria...",
         "all_cats": "Todas",
@@ -48,6 +49,7 @@ _NOTES_TEXTS: dict[str, dict[str, str]] = {
     "en": {
         "title": "Document Notes",
         "close": "Close panel",
+        "toggle_vis": "Show / hide notes on page",
         "new_note": "+ New note",
         "search_placeholder": "Search notes or category...",
         "all_cats": "All",
@@ -61,6 +63,7 @@ _NOTES_TEXTS: dict[str, dict[str, str]] = {
     "pt": {
         "title": "Notas do documento",
         "close": "Fechar painel",
+        "toggle_vis": "Mostrar / ocultar notas na pagina",
         "new_note": "+ Nova nota",
         "search_placeholder": "Buscar em notas ou categoria...",
         "all_cats": "Todas",
@@ -87,6 +90,7 @@ class NotesPanel(QFrame):
     add_note_requested = Signal(str, str, str)
     delete_note_requested = Signal(str)
     update_note_requested = Signal(str, str, str)
+    notes_visibility_toggled = Signal(bool)
 
     def __init__(self, *, mode: str = "dark", lang: str = "es", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -98,6 +102,7 @@ class NotesPanel(QFrame):
         self._lang = lang if lang in ("es", "en", "pt") else "es"
         self._notes: list[AnnotationRecord] = []
         self._selected_color: str = ""
+        self._notes_visible: bool = True
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -120,6 +125,15 @@ class NotesPanel(QFrame):
 
         self.count_tag = StatusTag("0", tone="accent", parent=self._header_frame)
         hdr.addWidget(self.count_tag)
+
+        self.toggle_vis_btn = QPushButton("", self._header_frame)
+        self.toggle_vis_btn.setObjectName("NotesHeaderBtn")
+        self.toggle_vis_btn.setCheckable(True)
+        self.toggle_vis_btn.setChecked(True)
+        self.toggle_vis_btn.setFixedSize(26, 26)
+        self.toggle_vis_btn.setToolTip(_tn("toggle_vis", self._lang))
+        self.toggle_vis_btn.clicked.connect(lambda ch: self.notes_visibility_toggled.emit(bool(ch)))
+        hdr.addWidget(self.toggle_vis_btn)
 
         self.close_btn = QPushButton("", self._header_frame)
         self.close_btn.setObjectName("NotesHeaderBtn")
@@ -306,6 +320,16 @@ class NotesPanel(QFrame):
 
         self._cards_layout.addStretch(1)
 
+    def set_notes_visibility_state(self, visible: bool) -> None:
+        self._notes_visible = bool(visible)
+        self.toggle_vis_btn.blockSignals(True)
+        self.toggle_vis_btn.setChecked(self._notes_visible)
+        self.toggle_vis_btn.blockSignals(False)
+        p = get_palette(self._mode)
+        self.toggle_vis_btn.setIcon(
+            load_svg_icon("eye" if self._notes_visible else "eye_off", color=p["icon_color"], size=14)
+        )
+
     def apply_theme(self, mode: str) -> None:
         new_mode = "light" if mode == "light" else "dark"
         if new_mode == self._applied_mode:
@@ -314,6 +338,9 @@ class NotesPanel(QFrame):
         self._mode = new_mode
         p = get_palette(self._mode)
         self._icon_lbl.setPixmap(load_svg_pixmap("comment", color=p["icon_color"], size=16))
+        self.toggle_vis_btn.setIcon(
+            load_svg_icon("eye" if self._notes_visible else "eye_off", color=p["icon_color"], size=14)
+        )
         self.close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=14))
         self.count_tag.apply_theme(self._mode)
         self.setStyleSheet(
@@ -345,6 +372,7 @@ class NotesPanel(QFrame):
     def retranslate(self, lang: str) -> None:
         self._lang = lang if lang in ("es", "en", "pt") else "es"
         self.title_lbl.setText(_tn("title", self._lang))
+        self.toggle_vis_btn.setToolTip(_tn("toggle_vis", self._lang))
         self.close_btn.setToolTip(_tn("close", self._lang))
         self.add_note_btn.setText(_tn("new_note", self._lang))
         self.search_input.setPlaceholderText(_tn("search_placeholder", self._lang))

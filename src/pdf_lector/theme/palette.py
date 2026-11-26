@@ -513,6 +513,15 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
         border: 1px solid {p["border_hairline"]};
     }}
 
+    QTextEdit {{
+        background-color: {p["bg_glass_elevated"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_strong"]};
+        padding: 6px;
+        selection-background-color: {p["accent"]};
+        selection-color: #FFFFFF;
+    }}
+
     QSplitter::handle {{
         background-color: {p["border_hairline"]};
     }}
