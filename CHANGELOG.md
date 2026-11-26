@@ -3,6 +3,19 @@
 All notable changes to **PDF/MD Lector by TRODAI** are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-26
+
+### Fixed
+- Fixed native access violation / `RuntimeError` on `ToolCard` click (`widgets.py` `shiboken6.isValid(self)` guard after synchronous view switch).
+- Fixed thread-safety crash in `DocumentRagIndex.index_pdf` by replacing `pypdfium2` inside `QThreadPool` workers with pure-Python `pypdf.PdfReader`.
+
+### Added
+- **Local AI Hardware Gate & Legal API / Official MCP Connectors (`core/ai_hardware.py`, `ui/ai_panel.py`):** Probes PC RAM (>=16 GB) and GPU VRAM (>=6 GB) before enabling local `ollama` LLMs; when hardware is insufficient, blocks heavy local LLM startup and guides 1-click connection to official BYOK APIs (OpenAI, Gemini, Anthropic) or an Official MCP Server (`mcp_official`) under explicit user consent, DPAPI encryption, and provider terms. `Local BM25` remains 100% offline with 0 GPU requirement.
+- **Full Morphological Dictionary, Fuzzy Suggestions & Opt-in Wiktionary (`core/dictionary_engine.py`, `ui/dictionary_panel.py`):** Added ES/EN lemmatization (`fondos -> fondo`, `personalizables -> personalizable`, verb/adjective/plural stems), expanded offline lexicon, `suggest_fuzzy` clickable suggestion chips, compressed `.json.gz` language packs (`pt`, `fr`, `de`, `it`), and opt-in Wikimedia Wiktionary REST API lookup with automatic SQLite caching.
+- **Draggable Sticky Notes, Floating Note Cards & Notes Panel (`ui/pdf_canvas.py`, `ui/notes_panel.py`, `core/pdf_annotations.py`):** Sticky notes (`/Text`) can be dragged across the canvas, clicked to open an interactive floating card near their position (6 colors, categories persisted via PDF `/Subj`, Close, Delete with confirmation), and organized/filtered in a dedicated collapsible `NotesPanel`.
+- **Autosave, Manual Save & Crash Recovery (`core/autosave.py`, `ui/main_window.py`):** Atomic 30s periodic + 3s debounced snapshots saving open tabs, zoom, rotation, scroll position, unsaved annotations, and Markdown buffers, plus automatic recovery banner after unexpected termination.
+- **In-App Direct Updates (`ui/about_updater_dialog.py`, `ui/main_window.py`):** Background GitHub Releases update check (respecting `Solo offline` and 24h cadence), SHA-256 verification, and 1-click *"Instalar y reiniciar ahora"* launcher, alongside `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md`.
+
 ## [0.1.0] - 2026-11-26
 
 ### Added

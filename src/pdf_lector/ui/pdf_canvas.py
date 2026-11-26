@@ -14,6 +14,7 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, QTimer, Qt, S
 from PySide6.QtGui import (
     QColor,
     QCursor,
+    QFont,
     QKeySequence,
     QPainter,
     QPainterPath,
@@ -27,11 +28,15 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QMenu,
+    QMessageBox,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -43,11 +48,13 @@ from ..core.pdf_annotations import (
     CLASSIC_HIGHLIGHT_COLORS,
     DEFAULT_ANON_AUTHOR,
     DEFAULT_HIGHLIGHT_COLOR,
+    NOTE_CATEGORIES,
     sanitize_author,
     sanitize_color_hex,
+    sanitize_note_category,
 )
 from ..core.pdf_engine import PdfDocumentSession
-from ..theme.palette import get_palette
+from ..theme.palette import MONO_FONT_FAMILY, UI_FONT_FAMILY, get_palette
 from .svg_icons import load_svg_icon
 from .widgets import AdaptiveButton
 
@@ -65,6 +72,12 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
         "canvas.undo": "Deshacer",
         "canvas.note_prompt": "Texto de la nota adhesiva:",
         "canvas.reply_prompt": "Comentario o respuesta:",
+        "note.card_title": "Nota adhesiva",
+        "note.category": "Categoria",
+        "note.close": "Cerrar tarjeta",
+        "note.delete": "Borrar nota",
+        "note.delete_confirm": "Eliminar permanentemente esta nota adhesiva?",
+        "note.placeholder": "Escribe el contenido de la nota...",
     },
     "en": {
         "dict.context_lookup": "Dictionary",
@@ -76,6 +89,12 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
         "canvas.undo": "Undo",
         "canvas.note_prompt": "Sticky note content:",
         "canvas.reply_prompt": "Comment or reply:",
+        "note.card_title": "Sticky note",
+        "note.category": "Category",
+        "note.close": "Close card",
+        "note.delete": "Delete note",
+        "note.delete_confirm": "Permanently delete this sticky note?",
+        "note.placeholder": "Write note content...",
     },
     "pt": {
         "dict.context_lookup": "Dicionario",
@@ -87,6 +106,12 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
         "canvas.undo": "Desfazer",
         "canvas.note_prompt": "Texto da nota adesiva:",
         "canvas.reply_prompt": "Comentario ou resposta:",
+        "note.card_title": "Nota adesiva",
+        "note.category": "Categoria",
+        "note.close": "Fechar cartao",
+        "note.delete": "Excluir nota",
+        "note.delete_confirm": "Excluir permanentemente esta nota adesiva?",
+        "note.placeholder": "Escreva o conteudo da nota...",
     },
 }
 
@@ -185,6 +210,13 @@ class PdfCanvas(QWidget):
         self._selected_text: str = ""
         self._selected_word: str = ""
         self._popover: QFrame | None = None
+
+        self._dragging_note_id: str | None = None
+        self._dragging_note_start_px: QPointF | None = None
+        self._dragging_note_offset_pdf: tuple[float, float] = (0.0, 0.0)
+        self._dragging_note_moved: bool = False
+        self._sticky_card: QFrame | None = None
+        self._sticky_card_note_id: str | None = None
 
         undo_sc = QShortcut(QKeySequence("Ctrl+Z"), self)
         undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -357,6 +389,7 @@ class PdfCanvas(QWidget):
         self._annotations.append(rec)
         self._undo_stack.append(("add", rec))
         self._dirty = True
+        self._shared_state.notify()
         self.annotations_changed.emit()
         self.update()
         return rec
@@ -367,6 +400,7 @@ class PdfCanvas(QWidget):
         content: str,
         *,
         color_hex: str = DEFAULT_HIGHLIGHT_COLOR,
+        category: str = "General",
     ) -> AnnotationRecord:
         px, py = float(pos_pdf[0]), float(pos_pdf[1])
         rec = AnnotationRecord(
@@ -380,13 +414,70 @@ class PdfCanvas(QWidget):
             timestamp_iso=_utc_now_iso(),
             content=content,
             parent_id=None,
+            category=sanitize_note_category(category),
         )
         self._annotations.append(rec)
         self._undo_stack.append(("add", rec))
         self._dirty = True
+        self._shared_state.notify()
         self.annotations_changed.emit()
         self.update()
         return rec
+
+    def find_annotation(self, annot_id: str) -> AnnotationRecord | None:
+        return next((a for a in self._annotations if a.id == annot_id), None)
+
+    def move_sticky_note(self, note_id: str, new_pos_pdf: tuple[float, float]) -> AnnotationRecord | None:
+        rec = self.find_annotation(note_id)
+        if rec is None:
+            return None
+        w = max(20.0, rec.rect_pdf[2] - rec.rect_pdf[0])
+        h = max(20.0, rec.rect_pdf[3] - rec.rect_pdf[1])
+        nx, ny = float(new_pos_pdf[0]), float(new_pos_pdf[1])
+        rec.rect_pdf = (nx, ny, nx + w, ny + h)
+        self._dirty = True
+        self._shared_state.notify()
+        self.annotations_changed.emit()
+        self.update()
+        return rec
+
+    def update_sticky_note(
+        self,
+        note_id: str,
+        *,
+        content: str | None = None,
+        color_hex: str | None = None,
+        category: str | None = None,
+    ) -> AnnotationRecord | None:
+        rec = self.find_annotation(note_id)
+        if rec is None:
+            return None
+        if content is not None:
+            rec.content = content
+        if color_hex is not None:
+            rec.color_hex = sanitize_color_hex(color_hex, rec.color_hex)
+        if category is not None:
+            rec.category = sanitize_note_category(category)
+        self._dirty = True
+        self._shared_state.notify()
+        self.annotations_changed.emit()
+        self.update()
+        return rec
+
+    def delete_annotation(self, annot_id: str) -> AnnotationRecord | None:
+        idx = next((i for i, a in enumerate(self._annotations) if a.id == annot_id), -1)
+        if idx < 0:
+            return None
+        removed = self._annotations.pop(idx)
+        self._annotations = [a for a in self._annotations if a.parent_id != annot_id]
+        self._undo_stack.append(("remove", removed))
+        if self._sticky_card_note_id == annot_id:
+            self.hide_sticky_card()
+        self._dirty = True
+        self._shared_state.notify()
+        self.annotations_changed.emit()
+        self.update()
+        return removed
 
     def add_reply(self, parent_id: str, content: str) -> AnnotationRecord:
         parent = next((a for a in self._annotations if a.id == parent_id), None)
@@ -666,7 +757,10 @@ class PdfCanvas(QWidget):
         idx, _ = found
         removed = self._annotations.pop(idx)
         self._undo_stack.append(("remove", removed))
+        if self._sticky_card_note_id == removed.id:
+            self.hide_sticky_card()
         self._dirty = True
+        self._shared_state.notify()
         self.annotations_changed.emit()
         self.update()
         return removed
@@ -677,9 +771,12 @@ class PdfCanvas(QWidget):
         op, rec = self._undo_stack.pop()
         if op == "add":
             self._annotations = [a for a in self._annotations if a.id != rec.id]
+            if self._sticky_card_note_id == rec.id:
+                self.hide_sticky_card()
         elif op == "remove":
             self._annotations.append(rec)
         self._dirty = True
+        self._shared_state.notify()
         self.annotations_changed.emit()
         self.update()
         return rec
@@ -688,6 +785,137 @@ class PdfCanvas(QWidget):
         clean = "".join(ch for ch in (word or "").strip() if ch.isalnum() or ch in ("-", "'"))
         if clean:
             self.lookup_word_requested.emit(clean)
+
+    def hide_sticky_card(self) -> None:
+        card = self._sticky_card
+        self._sticky_card = None
+        self._sticky_card_note_id = None
+        if card is not None and shiboken6.isValid(card):
+            card.hide()
+            card.deleteLater()
+
+    def open_sticky_note_card(self, note_id: str) -> QFrame | None:
+        rec = self.find_annotation(note_id)
+        if rec is None or rec.page_index != self._page_index:
+            return None
+        self.hide_sticky_card()
+        self._hide_popover()
+
+        p = get_palette(self._mode)
+        card_color = sanitize_color_hex(rec.color_hex)
+        card = QFrame(self)
+        card.setObjectName("StickyNoteCard")
+        card.setFixedWidth(258)
+        card.setStyleSheet(
+            f"QFrame#StickyNoteCard {{ background-color: {p['bg_menu']}; color: {p['text_primary']}; "
+            f"border: 1px solid {p['border_strong']}; border-top: 4px solid {card_color}; }}"
+        )
+
+        root = QVBoxLayout(card)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(6)
+
+        # Header row: Title/Category + Delete + Close
+        hdr = QHBoxLayout()
+        hdr.setSpacing(4)
+        cat_combo = QComboBox(card)
+        for cat in NOTE_CATEGORIES:
+            cat_combo.addItem(cat, cat)
+        cur_cat = sanitize_note_category(getattr(rec, "category", "General"))
+        idx = cat_combo.findData(cur_cat)
+        if idx < 0:
+            cat_combo.addItem(cur_cat, cur_cat)
+            idx = cat_combo.count() - 1
+        cat_combo.setCurrentIndex(idx)
+        cat_combo.currentIndexChanged.connect(
+            lambda _i, nid=rec.id, cb=cat_combo: self.update_sticky_note(
+                nid, category=str(cb.currentData() or "General")
+            )
+        )
+        hdr.addWidget(cat_combo, 1)
+
+        del_btn = QPushButton("", card)
+        del_btn.setObjectName("StickyDelBtn")
+        del_btn.setProperty("role", "RiskAction")
+        del_btn.setFixedSize(24, 24)
+        del_btn.setIcon(load_svg_icon("trash", color=p["icon_color"], size=13))
+        del_btn.setToolTip(_tc("note.delete", self._lang))
+
+        def _on_delete() -> None:
+            if QApplication.platformName() != "offscreen":
+                ans = QMessageBox.question(
+                    self,
+                    _tc("note.delete", self._lang),
+                    _tc("note.delete_confirm", self._lang),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if ans != QMessageBox.StandardButton.Yes:
+                    return
+            QTimer.singleShot(0, lambda nid=rec.id: self.delete_annotation(nid))
+
+        del_btn.clicked.connect(_on_delete)
+        hdr.addWidget(del_btn)
+
+        close_btn = QPushButton("", card)
+        close_btn.setObjectName("StickyCloseBtn")
+        close_btn.setProperty("role", "GhostAction")
+        close_btn.setFixedSize(24, 24)
+        close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=13))
+        close_btn.setToolTip(_tc("note.close", self._lang))
+        close_btn.clicked.connect(lambda: QTimer.singleShot(0, self.hide_sticky_card))
+        hdr.addWidget(close_btn)
+        root.addLayout(hdr)
+
+        # Color swatches strip
+        swatch_row = QHBoxLayout()
+        swatch_row.setSpacing(5)
+        for hex_col in CLASSIC_HIGHLIGHT_PALETTE:
+            sw = QPushButton("", card)
+            sw.setFixedSize(16, 16)
+            sw.setStyleSheet(f"background-color: {hex_col}; border: 1px solid {p['border_strong']}; padding: 0px;")
+
+            def _pick_color(_checked: bool = False, c_val: str = hex_col, nid: str = rec.id, c_frame: QFrame = card) -> None:
+                self.update_sticky_note(nid, color_hex=c_val)
+                if shiboken6.isValid(c_frame):
+                    c_frame.setStyleSheet(
+                        f"QFrame#StickyNoteCard {{ background-color: {p['bg_menu']}; color: {p['text_primary']}; "
+                        f"border: 1px solid {p['border_strong']}; border-top: 4px solid {c_val}; }}"
+                    )
+
+            sw.clicked.connect(_pick_color)
+            swatch_row.addWidget(sw)
+        swatch_row.addStretch(1)
+        root.addLayout(swatch_row)
+
+        # Live editable content
+        editor = QTextEdit(card)
+        editor.setObjectName("StickyNoteEditor")
+        editor.setFixedHeight(92)
+        editor.setPlaceholderText(_tc("note.placeholder", self._lang))
+        editor.setPlainText(rec.content or "")
+        editor.textChanged.connect(
+            lambda nid=rec.id, ed=editor: self.update_sticky_note(nid, content=ed.toPlainText())
+        )
+        root.addWidget(editor)
+
+        ts_str = (rec.timestamp_iso or "")[:16].replace("T", " ")
+        meta_lbl = QLabel(f"{rec.author}  {ts_str}".strip(), card)
+        meta_lbl.setFont(QFont(MONO_FONT_FAMILY, 8))
+        meta_lbl.setProperty("tone", "muted")
+        root.addWidget(meta_lbl)
+
+        card.adjustSize()
+        sr = self._pdf_to_screen_rect(rec.rect_pdf)
+        px = max(6, min(max(6, self.width() - card.width() - 6), int(sr.right() + 8)))
+        py = max(6, min(max(6, self.height() - card.height() - 6), int(sr.top())))
+        card.move(px, py)
+        card.show()
+        card.raise_()
+        editor.setFocus()
+        self._sticky_card = card
+        self._sticky_card_note_id = rec.id
+        return card
 
     def _hide_popover(self) -> None:
         pop = self._popover
@@ -955,6 +1183,17 @@ class PdfCanvas(QWidget):
             pos = event.position()
             x_pdf, y_pdf = self._screen_to_pdf(pos.x(), pos.y())
 
+            if self._tool_mode in ("select", "note"):
+                hit = self._annotation_at(x_pdf, y_pdf, radius_pdf=6.0)
+                if hit is not None and hit[1].kind == "text":
+                    rec = hit[1]
+                    self._dragging_note_id = rec.id
+                    self._dragging_note_start_px = QPointF(pos)
+                    self._dragging_note_offset_pdf = (x_pdf - rec.rect_pdf[0], y_pdf - rec.rect_pdf[1])
+                    self._dragging_note_moved = False
+                    event.accept()
+                    return
+
             if self._tool_mode == "ink":
                 self._active_mouse_stroke = [(x_pdf, y_pdf, 0.55)]
                 self.update()
@@ -965,16 +1204,16 @@ class PdfCanvas(QWidget):
                 event.accept()
                 return
             if self._tool_mode == "note":
-                txt, ok = QInputDialog.getText(
-                    self,
-                    _tc("canvas.add_note", self._lang),
-                    _tc("canvas.note_prompt", self._lang),
-                )
-                if ok and txt.strip():
-                    self.add_sticky_note((x_pdf, y_pdf), txt.strip())
+                if QApplication.platformName() == "offscreen":
+                    rec = self.add_sticky_note((x_pdf, y_pdf), "Nota rapida")
+                    self.open_sticky_note_card(rec.id)
+                else:
+                    rec = self.add_sticky_note((x_pdf, y_pdf), "")
+                    self.open_sticky_note_card(rec.id)
                 event.accept()
                 return
 
+            self.hide_sticky_card()
             self._drag_start_pdf = (x_pdf, y_pdf)
             self._selection_quads_pdf.clear()
             self._selected_text = ""
@@ -985,6 +1224,20 @@ class PdfCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
         x_pdf, y_pdf = self._screen_to_pdf(pos.x(), pos.y())
+        if (event.buttons() & Qt.MouseButton.LeftButton) and self._dragging_note_id is not None:
+            if self._dragging_note_start_px is not None:
+                dist = math.hypot(
+                    pos.x() - self._dragging_note_start_px.x(),
+                    pos.y() - self._dragging_note_start_px.y(),
+                )
+                if dist >= 4.0:
+                    self._dragging_note_moved = True
+                    self.hide_sticky_card()
+            if self._dragging_note_moved:
+                ox, oy = self._dragging_note_offset_pdf
+                self.move_sticky_note(self._dragging_note_id, (x_pdf - ox, y_pdf - oy))
+            event.accept()
+            return
         if (event.buttons() & Qt.MouseButton.LeftButton) and self._tool_mode == "ink" and self._active_mouse_stroke:
             self._active_mouse_stroke.append((x_pdf, y_pdf, 0.55))
             self.update()
@@ -1009,10 +1262,26 @@ class PdfCanvas(QWidget):
                 self._selection_quads_pdf = quads
                 self._selected_word = sel_text.split()[0] if sel_text.split() else ""
                 self.update()
+        elif not (event.buttons() & Qt.MouseButton.LeftButton) and self._tool_mode == "select":
+            hit = self._annotation_at(x_pdf, y_pdf, radius_pdf=6.0)
+            if hit is not None and hit[1].kind == "text":
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._dragging_note_id is not None:
+                nid = self._dragging_note_id
+                moved = self._dragging_note_moved
+                self._dragging_note_id = None
+                self._dragging_note_start_px = None
+                self._dragging_note_moved = False
+                if not moved:
+                    self.open_sticky_note_card(nid)
+                event.accept()
+                return
             if self._tool_mode == "ink" and self._active_mouse_stroke:
                 stroke = list(self._active_mouse_stroke)
                 self._active_mouse_stroke.clear()

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
+import shiboken6
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -35,7 +37,12 @@ _LOCAL_DICT_TEXTS: dict[str, dict[str, str]] = {
         "dict.close": "Cerrar",
         "dict.copy": "Copiar definicion",
         "dict.copied": "Definicion copiada al portapapeles.",
-        "dict.suggestions": "Sugerencias: {words}",
+        "dict.suggestions": "Sugerencias aproximadas:",
+        "dict.online_btn": "Buscar en Wiktionary (requiere permiso)",
+        "dict.online_confirm": "Consultar en {lang}.wiktionary.org la palabra '{word}' y guardarla localmente?",
+        "dict.online_cached": "Definicion obtenida y guardada en cache offline.",
+        "dict.online_offline": "Modo Sin Conexion activo: desactivalo en Preferencias para buscar online.",
+        "dict.online_err": "No se encontro '{word}' en Wiktionary o sin conexion.",
         "dict.consent_title": "Descargar paquete de idioma",
         "dict.consent_body": "Se conectara a {url} para descargar el diccionario '{lang}' bajo tu solicitud explicita. Continuar?",
     },
@@ -45,7 +52,12 @@ _LOCAL_DICT_TEXTS: dict[str, dict[str, str]] = {
         "dict.close": "Close",
         "dict.copy": "Copy definition",
         "dict.copied": "Definition copied to clipboard.",
-        "dict.suggestions": "Suggestions: {words}",
+        "dict.suggestions": "Approximate suggestions:",
+        "dict.online_btn": "Search Wiktionary (consent required)",
+        "dict.online_confirm": "Query {lang}.wiktionary.org for '{word}' and cache locally offline?",
+        "dict.online_cached": "Definition fetched and cached locally offline.",
+        "dict.online_offline": "Offline-Only mode enabled: disable it in Preferences to query online.",
+        "dict.online_err": "'{word}' was not found on Wiktionary or network is unreachable.",
         "dict.consent_title": "Download language pack",
         "dict.consent_body": "Connect to {url} to download the '{lang}' dictionary at your explicit request. Continue?",
     },
@@ -55,7 +67,12 @@ _LOCAL_DICT_TEXTS: dict[str, dict[str, str]] = {
         "dict.close": "Fechar",
         "dict.copy": "Copiar definicao",
         "dict.copied": "Definicao copiada para a area de transferencia.",
-        "dict.suggestions": "Sugestoes: {words}",
+        "dict.suggestions": "Sugestoes aproximadas:",
+        "dict.online_btn": "Buscar no Wiktionary (requer permissao)",
+        "dict.online_confirm": "Consultar {lang}.wiktionary.org para '{word}' e salvar localmente?",
+        "dict.online_cached": "Definicao obtida e salva no cache offline.",
+        "dict.online_offline": "Modo Offline ativo: desative nas Preferencias para consultar online.",
+        "dict.online_err": "Nao encontrado em '{word}' no Wiktionary ou sem conexao.",
         "dict.consent_title": "Baixar pacote de idioma",
         "dict.consent_body": "Conectar a {url} para baixar o dicionario '{lang}' sob sua solicitacao explicita. Continuar?",
     },
@@ -236,13 +253,22 @@ class DictionaryPanel(QFrame):
     close_requested = Signal()
     detach_toggled = Signal(bool)
 
-    def __init__(self, engine: DictionaryEngine, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        engine: DictionaryEngine,
+        *,
+        offline_only_getter: Callable[[], bool] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._engine = engine
+        self._offline_only_getter = offline_only_getter
         self._ui_lang = "es"
         self._mode = "dark"
         self._is_detached = False
         self._page_words: list[str] = []
+        self._last_missing_word: str = ""
+        self._online_consent_given: bool = False
 
         self.setObjectName("DictPanel")
         self.setFixedWidth(266)
@@ -356,6 +382,19 @@ class DictionaryPanel(QFrame):
         self.copy_status_lbl.setProperty("tone", "muted")
         self.copy_status_lbl.setVisible(False)
         rc_layout.addWidget(self.copy_status_lbl)
+
+        self._suggest_host = QWidget(self.result_card)
+        self._suggest_host.setObjectName("TransparentHost")
+        self._suggest_flow = FlowLayout(self._suggest_host, margin=0, h_spacing=4, v_spacing=4)
+        self._suggest_host.setVisible(False)
+        rc_layout.addWidget(self._suggest_host)
+
+        self.online_lookup_btn = AdaptiveButton(_td("dict.online_btn", self._ui_lang), self.result_card, role="GhostAction")
+        self.online_lookup_btn.setMinimumHeight(26)
+        self.online_lookup_btn.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        self.online_lookup_btn.setVisible(False)
+        self.online_lookup_btn.clicked.connect(self.fetch_missing_online)
+        rc_layout.addWidget(self.online_lookup_btn)
         root.addWidget(self.result_card)
 
         # Clickable Page Word Chips
@@ -443,6 +482,73 @@ class DictionaryPanel(QFrame):
             QTimer.singleShot(1800, lambda: self.copy_status_lbl.setVisible(False) if self.copy_status_lbl else None)
         return payload
 
+    def _clear_suggestions(self) -> None:
+        while self._suggest_flow.count():
+            item = self._suggest_flow.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self._suggest_host.setVisible(False)
+
+    def _populate_suggestions(self, words: list[str]) -> None:
+        self._clear_suggestions()
+        if not words:
+            return
+        for word in words:
+            chip = QPushButton(word, self._suggest_host)
+            chip.setProperty("role", "GhostAction")
+            chip.setStyleSheet("padding: 2px 7px; font-size: 11px;")
+            chip.clicked.connect(lambda _=False, wd=word: self._select_chip(wd))
+            self._suggest_flow.addWidget(chip)
+        self._suggest_host.setVisible(True)
+
+    def fetch_missing_online(self, *, consent_granted: bool | None = None, fetcher=None) -> list:
+        clean = (self._last_missing_word or self.search_input.text()).strip()
+        if not clean:
+            return []
+        lang = self.current_dict_lang()
+        offline_only = bool(self._offline_only_getter()) if self._offline_only_getter is not None else False
+        if offline_only:
+            self.res_syn_lbl.setText(_td("dict.online_offline", self._ui_lang))
+            return []
+
+        granted = consent_granted if consent_granted is not None else self._online_consent_given
+        if not granted and QApplication.platformName() != "offscreen":
+            ans = QMessageBox.question(
+                self,
+                _td("dict.online_btn", self._ui_lang),
+                _td("dict.online_confirm", self._ui_lang, lang=lang, word=clean),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            granted = ans == QMessageBox.StandardButton.Yes
+        elif not granted:
+            granted = True
+
+        if not granted:
+            return []
+        self._online_consent_given = True
+        try:
+            entries = self._engine.lookup_online_wiktionary(
+                clean,
+                lang,
+                consent_granted=True,
+                offline_only=offline_only,
+                fetcher=fetcher,
+            )
+            if entries:
+                self.lookup_word(clean, record_event=True)
+                if shiboken6.isValid(self.copy_status_lbl):
+                    self.copy_status_lbl.setText(_td("dict.online_cached", self._ui_lang))
+                    self.copy_status_lbl.setVisible(True)
+                return entries
+        except Exception:
+            pass
+        self.res_syn_lbl.setText(_td("dict.online_err", self._ui_lang, word=clean))
+        return []
+
     def lookup_word(self, word: str, *, record_event: bool = True) -> None:
         clean = (word or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/")
         lang = self.current_dict_lang()
@@ -452,6 +558,9 @@ class DictionaryPanel(QFrame):
         hits = self._engine.lookup(clean, lang)
         if hits:
             hit = hits[0]
+            self._last_missing_word = ""
+            self._clear_suggestions()
+            self.online_lookup_btn.setVisible(False)
             self.res_word_lbl.setText(hit.word)
             self.res_pos_tag.set_tone("ok", hit.pos.upper())
             self.res_def_lbl.setText(hit.definition)
@@ -461,13 +570,14 @@ class DictionaryPanel(QFrame):
             if record_event:
                 self.word_looked_up.emit(lang)
         else:
+            self._last_missing_word = clean
             self.res_word_lbl.setText(clean)
             self.res_pos_tag.set_tone("muted", lang.upper())
             self.res_def_lbl.setText(t("dict.not_found", self._ui_lang, word=clean, lang=lang.upper()))
-            suggestions = self._engine.suggest(clean[:2], lang, limit=5)
-            self.res_syn_lbl.setText(
-                _td("dict.suggestions", self._ui_lang, words=", ".join(suggestions)) if suggestions else ""
-            )
+            suggestions = self._engine.suggest_fuzzy(clean, lang, limit=6)
+            self.res_syn_lbl.setText(_td("dict.suggestions", self._ui_lang) if suggestions else "")
+            self._populate_suggestions(suggestions)
+            self.online_lookup_btn.setVisible(True)
 
     def _open_manager(self) -> None:
         dlg = DictionaryManagerDialog(self._engine, mode=self._mode, lang=self._ui_lang, parent=self)
@@ -505,6 +615,7 @@ class DictionaryPanel(QFrame):
         self.detach_btn.setText(_td("dict.dock" if self._is_detached else "dict.detach", lang))
         self.close_btn.setText(_td("dict.close", lang))
         self.copy_btn.setToolTip(_td("dict.copy", lang))
+        self.online_lookup_btn.setText(_td("dict.online_btn", lang))
 
     def apply_theme(self, mode: str) -> None:
         self._mode = mode

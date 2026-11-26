@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,6 +29,13 @@ import shiboken6
 
 from .. import APP_NAME, COMPANY_NAME, get_base_dir, read_version
 from ..core.ai_chat_history import AiChatHistoryStore
+from ..core.autosave import (
+    AutosaveTabState,
+    SessionAutosaveManager,
+    SessionSnapshot,
+    deserialize_annotation,
+    serialize_annotation,
+)
 from ..core.bookmarks_store import BookmarksStore
 from ..core.crash_guard import CrashGuard
 from ..core.dictionary_engine import DictionaryEngine
@@ -39,7 +46,14 @@ from ..core.pdf_engine import generate_sample_pdf
 from ..core.recent_docs import RecentDocumentsStore
 from ..core.task_control import TaskManager
 from ..core.tools import ToolRegistry
-from ..core.updater import ReleaseInfo, load_updater_state, save_updater_state
+from ..core.updater import (
+    DEFAULT_RELEASES_API_URL,
+    ReleaseInfo,
+    check_for_updates,
+    load_updater_state,
+    save_updater_state,
+    should_run_auto_check,
+)
 from ..core.usage_insights import LocalUsageInsights
 from ..core.win32_bridge import apply_trodai_window_chrome
 from ..theme.motion_engine import MotionPerformanceGuard, ViewTransitionController
@@ -51,6 +65,31 @@ from .svg_icons import load_multicolor_svg_pixmap, load_svg_icon, load_svg_pixma
 from .theme_studio import ThemeStudioView
 from .viewer_view import MarkdownTabPage, PdfTabPage, ViewerView
 from .widgets import AdaptiveButton, SlidingNavPanel, StatusTag
+
+
+class _UpdateCheckSignals(QObject):
+    finished = Signal(object)
+
+
+class _BgUpdateCheckWorker(QRunnable):
+    def __init__(self, current_version: str, api_url: str, state_path: Path | None) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self.signals = _UpdateCheckSignals()
+        self._current_version = current_version
+        self._api_url = api_url
+        self._state_path = state_path
+
+    def run(self) -> None:
+        try:
+            state = load_updater_state(self._state_path)
+            if state.offline_only:
+                self.signals.finished.emit(None)
+                return
+            rel = check_for_updates(self._current_version, api_url=self._api_url, offline_only=False)
+            self.signals.finished.emit(rel)
+        except Exception:
+            self.signals.finished.emit(None)
 
 
 class MainWindow(QMainWindow):
@@ -72,6 +111,7 @@ class MainWindow(QMainWindow):
         task_manager: TaskManager | None = None,
         crash_guard: CrashGuard | None = None,
         updater_state_path: Path | None = None,
+        autosave_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self._profile = initial_profile.sanitized(check_media_exists=False)
@@ -90,7 +130,9 @@ class MainWindow(QMainWindow):
         self.task_manager = task_manager or TaskManager(parent=self)
         self.crash_guard = crash_guard
         self._updater_state_path = updater_state_path
+        self.autosave_manager = SessionAutosaveManager(base_dir=autosave_dir)
         self._active_release: ReleaseInfo | None = None
+        self._update_workers: list[_BgUpdateCheckWorker] = []
         self._ai_panel: Any = None
         self._active_tool_workspace: Any = None
         self._is_fullscreen = False
@@ -101,6 +143,17 @@ class MainWindow(QMainWindow):
         self._profile_save_timer.setSingleShot(True)
         self._profile_save_timer.setInterval(250)
         self._profile_save_timer.timeout.connect(self._flush_profile_save)
+
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(30_000)
+        self._autosave_timer.timeout.connect(lambda: self.save_autosave_snapshot(clean_exit=False))
+        if QApplication.platformName() != "offscreen":
+            self._autosave_timer.start()
+
+        self._autosave_debounce_timer = QTimer(self)
+        self._autosave_debounce_timer.setSingleShot(True)
+        self._autosave_debounce_timer.setInterval(3_000)
+        self._autosave_debounce_timer.timeout.connect(lambda: self.save_autosave_snapshot(clean_exit=False))
 
         self.setWindowTitle(f"{APP_NAME} · by {COMPANY_NAME}")
         self.setWindowFlags(
@@ -371,6 +424,29 @@ class MainWindow(QMainWindow):
         ub_lay.addWidget(self.ub_close_btn)
         main_col.addWidget(self.update_banner)
 
+        # Solid Opaque Recovery Banner (after unexpected shutdown / autosave restore)
+        self.recovery_banner = QFrame(self.root_canvas)
+        self.recovery_banner.setObjectName("RecoveryBanner")
+        self.recovery_banner.setVisible(False)
+        rb_lay = QHBoxLayout(self.recovery_banner)
+        rb_lay.setContentsMargins(14, 8, 14, 8)
+        rb_lay.setSpacing(8)
+
+        self.recovery_banner_lbl = QLabel("", self.recovery_banner)
+        self.recovery_banner_lbl.setFont(QFont(UI_FONT_FAMILY, 9, QFont.Weight.Medium))
+        self.recovery_banner_lbl.setWordWrap(True)
+        rb_lay.addWidget(self.recovery_banner_lbl, 1)
+
+        self.rec_save_all_btn = AdaptiveButton("Guardar todo", self.recovery_banner, role="PrimaryAction")
+        self.rec_save_all_btn.clicked.connect(self._on_recovery_save_all)
+        rb_lay.addWidget(self.rec_save_all_btn)
+
+        self.rec_close_btn = QPushButton("", self.recovery_banner)
+        self.rec_close_btn.setFixedSize(28, 28)
+        self.rec_close_btn.clicked.connect(self.recovery_banner.hide)
+        rb_lay.addWidget(self.rec_close_btn)
+        main_col.addWidget(self.recovery_banner)
+
         # Workspace Stack (0=Hub, 1=Viewer, 2=Theme Studio, 3=Inline Tool Runner)
         self.stack = QStackedWidget(self.root_canvas)
         self.hub_view = HubView(
@@ -383,6 +459,7 @@ class MainWindow(QMainWindow):
             bookmarks_store=self._bookmarks,
             dictionary_engine=self._dict_engine,
             guard=self._guard,
+            offline_only_getter=self.is_offline_only,
             parent=self.stack,
         )
         self.studio_view = ThemeStudioView(self._profile, guard=self._guard, parent=self.stack)
@@ -416,6 +493,8 @@ class MainWindow(QMainWindow):
         self.viewer_view.preferences_requested.connect(self.open_preferences_dialog)
         self.viewer_view.active_document_changed.connect(self._on_active_document_changed)
         self.viewer_view.document_opened.connect(self._on_viewer_document_opened)
+        self.viewer_view.document_edited.connect(self._schedule_debounced_autosave)
+        self.viewer_view.tabs.currentChanged.connect(lambda _idx: self._schedule_debounced_autosave())
 
         # Keyboard shortcuts: Ctrl+K search, F11 fullscreen, Esc exit fullscreen
         self._search_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
@@ -517,6 +596,149 @@ class MainWindow(QMainWindow):
 
     def has_unsaved_changes(self) -> bool:
         return self.viewer_view.has_unsaved_changes()
+
+    def is_offline_only(self) -> bool:
+        try:
+            return bool(load_updater_state(self._updater_state_path).offline_only)
+        except Exception:
+            return False
+
+    def _schedule_debounced_autosave(self) -> None:
+        if QApplication.platformName() != "offscreen" and shiboken6.isValid(self):
+            self._autosave_debounce_timer.start()
+
+    def save_all_documents(self) -> int:
+        saved = 0
+        for idx in range(self.viewer_view.tabs.count()):
+            tab = self.viewer_view.tabs.widget(idx)
+            if isinstance(tab, (PdfTabPage, MarkdownTabPage)) and tab.has_unsaved_changes():
+                if tab.save_document():
+                    saved += 1
+        self.viewer_view._on_tab_state_changed()
+        self.save_autosave_snapshot(clean_exit=False)
+        return saved
+
+    def _on_recovery_save_all(self) -> None:
+        self.save_all_documents()
+        self.recovery_banner.setVisible(False)
+
+    def save_autosave_snapshot(self, *, clean_exit: bool = False) -> Path:
+        tabs_payload: list[AutosaveTabState] = []
+        for idx in range(self.viewer_view.tabs.count()):
+            w = self.viewer_view.tabs.widget(idx)
+            if isinstance(w, PdfTabPage):
+                vbar = w.scroll.verticalScrollBar()
+                dirty = w.has_unsaved_changes()
+                annots = [serialize_annotation(a) for a in w.shared_annotations.records] if dirty else []
+                tabs_payload.append(
+                    AutosaveTabState(
+                        doc_path=str(w.pdf_path),
+                        doc_type="pdf",
+                        page_index=int(w.current_page),
+                        zoom=float(w.zoom),
+                        rotation=int(w.rotation),
+                        scroll_y=int(vbar.value()) if vbar is not None else 0,
+                        dirty=dirty,
+                        annotations=annots,
+                    )
+                )
+            elif isinstance(w, MarkdownTabPage):
+                dirty = w.has_unsaved_changes()
+                tabs_payload.append(
+                    AutosaveTabState(
+                        doc_path=str(w.md_path),
+                        doc_type="md",
+                        dirty=dirty,
+                        markdown_text=w.editor_widget.toPlainText() if dirty else None,
+                    )
+                )
+        snap = SessionSnapshot(
+            clean_exit=bool(clean_exit),
+            active_index=max(0, self.viewer_view.tabs.currentIndex()),
+            tabs=tabs_payload,
+        )
+        return self.autosave_manager.save_snapshot(snap)
+
+    def recover_previous_session(self, *, previous_crashed: bool = False, force: bool = False) -> int:
+        if not force and not self.autosave_manager.should_offer_recovery(previous_crashed=previous_crashed):
+            return 0
+        snap = self.autosave_manager.load_snapshot()
+        if snap is None or not snap.tabs:
+            return 0
+
+        restored = 0
+        has_dirty_recovered = False
+        for tstate in snap.tabs:
+            opened = self.viewer_view.open_document(Path(tstate.doc_path))
+            if not opened:
+                continue
+            restored += 1
+            tab = self.viewer_view.current_tab()
+            if isinstance(tab, PdfTabPage):
+                if abs(tab.zoom - tstate.zoom) > 0.01:
+                    tab.set_zoom(tstate.zoom)
+                if tstate.rotation % 360 != tab.rotation:
+                    tab.rotation = tstate.rotation % 360
+                    tab._rendered_signatures.clear()
+                    for c in tab._page_canvases:
+                        c.set_rotation_and_zoom(tab.rotation, tab.zoom)
+                if 0 <= tstate.page_index < tab.session.page_count:
+                    tab.set_page(tstate.page_index)
+                if tstate.scroll_y > 0:
+                    tab.scroll.verticalScrollBar().setValue(tstate.scroll_y)
+                if tstate.dirty and tstate.annotations:
+                    tab.shared_annotations.records = [
+                        deserialize_annotation(a) for a in tstate.annotations
+                    ]
+                    tab.shared_annotations.dirty = True
+                    tab.shared_annotations.notify()
+                    has_dirty_recovered = True
+            elif isinstance(tab, MarkdownTabPage):
+                if tstate.dirty and tstate.markdown_text is not None:
+                    tab.editor_widget.setPlainText(tstate.markdown_text)
+                    has_dirty_recovered = True
+
+        if restored > 0:
+            if 0 <= snap.active_index < self.viewer_view.tabs.count():
+                self.viewer_view.tabs.setCurrentIndex(snap.active_index)
+            self.viewer_view._on_tab_state_changed()
+            self.switch_view(1, immediate=True)
+            msg = "Se recupero tu ultima sesion autoguardada tras un cierre inesperado."
+            if has_dirty_recovered:
+                msg += " Tienes cambios sin guardar restaurados."
+            self.recovery_banner_lbl.setText(msg)
+            self._apply_update_banner_theme()
+            self.recovery_banner.setVisible(True)
+        return restored
+
+    def start_background_update_check(
+        self,
+        *,
+        api_url: str = DEFAULT_RELEASES_API_URL,
+        current_version: str | None = None,
+        force: bool = False,
+    ) -> bool:
+        state = load_updater_state(self._updater_state_path)
+        if state.offline_only:
+            return False
+        if not force and not should_run_auto_check(state):
+            return False
+        worker = _BgUpdateCheckWorker(
+            current_version=current_version or read_version(),
+            api_url=api_url,
+            state_path=self._updater_state_path,
+        )
+        self._update_workers.append(worker)
+        worker.signals.finished.connect(self._on_bg_update_finished, Qt.ConnectionType.QueuedConnection)
+        QThreadPool.globalInstance().start(worker)
+        return True
+
+    def _on_bg_update_finished(self, rel: Any) -> None:
+        self._update_workers.clear()
+        if not shiboken6.isValid(self) or rel is None or not isinstance(rel, ReleaseInfo):
+            return
+        if self.should_show_background_update(rel):
+            self.show_update_banner(rel)
 
     def can_restart_for_update(self) -> bool:
         """Return True only if zero tabs have unsaved changes and zero background tasks are active."""
@@ -683,6 +905,7 @@ class MainWindow(QMainWindow):
             state_path=self._updater_state_path,
             has_unsaved_fn=self.has_unsaved_changes,
             has_active_tasks_fn=lambda: len(self.task_manager.active_tasks()) > 0,
+            initial_release=self._active_release,
             lang=self._profile.language,
             mode=self._profile.base_mode,
             parent=self,
@@ -732,6 +955,13 @@ class MainWindow(QMainWindow):
         )
         self.update_banner_lbl.setStyleSheet(f"color: {p['text_primary']};")
         self.ub_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=13))
+
+        self.recovery_banner.setStyleSheet(
+            f"QFrame#RecoveryBanner {{ background-color: {p['bg_glass_elevated']}; "
+            f"border-bottom: 1px solid {p['border_strong']}; }}"
+        )
+        self.recovery_banner_lbl.setStyleSheet(f"color: {p['text_primary']};")
+        self.rec_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=13))
 
     def switch_view(self, index: int, *, immediate: bool = False) -> None:
         self.transitions.switch_to(index, self._profile, immediate=immediate)
@@ -950,6 +1180,14 @@ class MainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event) -> None:
+        if self._autosave_timer.isActive():
+            self._autosave_timer.stop()
+        if self._autosave_debounce_timer.isActive():
+            self._autosave_debounce_timer.stop()
+        try:
+            self.save_autosave_snapshot(clean_exit=True)
+        except Exception:
+            pass
         if self._profile_save_timer.isActive():
             self._profile_save_timer.stop()
             self._flush_profile_save()

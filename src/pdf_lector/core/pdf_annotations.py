@@ -24,6 +24,7 @@ CLASSIC_HIGHLIGHT_COLORS: tuple[str, ...] = (
     "#D8B4FE",
 )
 DEFAULT_HIGHLIGHT_COLOR = "#FEF08A"
+NOTE_CATEGORIES: tuple[str, ...] = ("General", "Importante", "Revisar", "Idea", "Pendiente")
 VALID_KINDS: tuple[str, ...] = ("highlight", "text", "ink", "freetext", "popup")
 _MANAGED_SUBTYPES = {"/Highlight", "/Text", "/Ink", "/FreeText", "/Popup"}
 _HEX_RE = re.compile(r"^#?([0-9A-Fa-f]{6})$")
@@ -48,6 +49,7 @@ class AnnotationRecord:
     parent_id: str | None = None
     stroke_width: float = 2.0
     opacity: float = 0.45
+    category: str = "General"
 
 
 def _pikepdf():
@@ -63,6 +65,17 @@ def sanitize_color_hex(color_hex: str | None, fallback: str = DEFAULT_HIGHLIGHT_
     if not m:
         return fallback
     return f"#{m.group(1).upper()}"
+
+
+def sanitize_note_category(category: str | None) -> str:
+    """Normalize sticky note category label (defaults to 'General')."""
+    clean = " ".join((category or "").split()).strip()
+    if not clean:
+        return "General"
+    for preset in NOTE_CATEGORIES:
+        if clean.lower() == preset.lower():
+            return preset
+    return clean[:32]
 
 
 def sanitize_author(author: str | None) -> str:
@@ -331,6 +344,7 @@ def load_pdf_annotations(pdf_path: Path | str) -> list[AnnotationRecord]:
                 author = sanitize_author(str(annot.get("/T", "")) if "/T" in annot else "")
                 ts_iso = pdf_date_to_iso(str(annot.get("/M", "")) if "/M" in annot else "")
                 content = str(annot.get("/Contents", "")) if "/Contents" in annot else ""
+                category = sanitize_note_category(str(annot.get("/Subj", "")) if "/Subj" in annot else "General")
 
                 parent_id: str | None = None
                 parent_obj = annot.get("/IRT") or annot.get("/Parent")
@@ -369,6 +383,7 @@ def load_pdf_annotations(pdf_path: Path | str) -> list[AnnotationRecord]:
                         parent_id=parent_id,
                         stroke_width=stroke_width,
                         opacity=opacity,
+                        category=category,
                     )
                 )
     except PermissionError:
@@ -493,6 +508,7 @@ def save_pdf_annotations(
                         d["/CA"] = max(0.15, min(0.85, float(rec.opacity)))
                     elif rec.kind == "text":
                         d["/Name"] = pikepdf.Name("/Comment")
+                        d["/Subj"] = sanitize_note_category(getattr(rec, "category", "General"))
                         d["/Open"] = False
                     elif rec.kind == "ink":
                         ink_list = pikepdf.Array(

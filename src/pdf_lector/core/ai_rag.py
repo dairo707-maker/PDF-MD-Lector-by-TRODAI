@@ -28,6 +28,7 @@ PROVIDER_SECRET_KEYS: dict[str, str] = {
     "anthropic": "byok_anthropic_key",
     "claude": "byok_anthropic_key",
     "ollama": "byok_ollama_key",
+    "mcp_official": "byok_mcp_key",
 }
 
 DEFAULT_ENDPOINTS: dict[str, str] = {
@@ -37,6 +38,7 @@ DEFAULT_ENDPOINTS: dict[str, str] = {
     "anthropic": "https://api.anthropic.com/v1/messages",
     "claude": "https://api.anthropic.com/v1/messages",
     "ollama": "http://127.0.0.1:11434/api/chat",
+    "mcp_official": "http://127.0.0.1:8787/mcp",
 }
 
 DEFAULT_MODELS: dict[str, str] = {
@@ -46,6 +48,7 @@ DEFAULT_MODELS: dict[str, str] = {
     "anthropic": "claude-3-5-sonnet-latest",
     "claude": "claude-3-5-sonnet-latest",
     "ollama": "llama3.2",
+    "mcp_official": "ask_document",
 }
 
 
@@ -170,30 +173,19 @@ class DocumentRagIndex:
             raise ValueError(f"Invalid PDF path: {reason}")
         resolved = Path(pdf_path).resolve()
 
-        import pypdfium2 as pdfium
+        from pypdf import PdfReader
 
-        doc = pdfium.PdfDocument(str(resolved))
+        reader = PdfReader(str(resolved))
         added = 0
-        try:
-            for page_idx in range(len(doc)):
-                page = doc[page_idx]
-                tp = None
-                try:
-                    tp = page.get_textpage()
-                    page_text = tp.get_text_range() or ""
-                finally:
-                    if tp is not None:
-                        tp.close()
-                    page.close()
-                if page_text.strip():
-                    added += self.index_text(
-                        page_text,
-                        source_path=str(resolved),
-                        doc_type="pdf",
-                        page_number=page_idx + 1,
-                    )
-        finally:
-            doc.close()
+        for page_idx, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                added += self.index_text(
+                    page_text,
+                    source_path=str(resolved),
+                    doc_type="pdf",
+                    page_number=page_idx + 1,
+                )
         return added
 
     def index_markdown(self, md_path: Path | str) -> int:
@@ -412,6 +404,21 @@ def _build_provider_request(
                 {"role": "user", "content": user_prompt},
             ],
         }
+    elif provider_norm == "mcp_official":
+        if resolved_key:
+            headers["Authorization"] = f"Bearer {resolved_key}"
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": model_name or "ask_document",
+                "arguments": {
+                    "question": question,
+                    "context": context_block,
+                },
+            },
+        }
     else:
         raise ValueError(f"Unsupported provider: {provider_norm}")
 
@@ -440,6 +447,16 @@ def _extract_provider_text(provider_norm: str, data: dict[str, Any]) -> str:
             return str(msg.get("content"))
         if data.get("response"):
             return str(data.get("response"))
+    elif provider_norm == "mcp_official":
+        result = data.get("result") or data
+        if isinstance(result, dict):
+            content = result.get("content") or []
+            if content and isinstance(content[0], dict) and content[0].get("text"):
+                return str(content[0].get("text"))
+            if result.get("answer"):
+                return str(result.get("answer"))
+            if result.get("text"):
+                return str(result.get("text"))
     return ""
 
 

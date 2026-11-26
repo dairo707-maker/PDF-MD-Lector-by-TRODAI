@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import difflib
+import gzip
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import ssl
 import subprocess
 import unicodedata
 from typing import Callable
 from urllib.error import URLError
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from .path_guard import validate_local_glossary_path
@@ -55,26 +58,26 @@ AVAILABLE_LANGUAGE_PACKS: tuple[LanguagePackInfo, ...] = (
     LanguagePackInfo(
         "pt",
         "Portugues",
-        "OpenLexicon PT (Wiktionary/Apache-2.0)",
-        "https://raw.githubusercontent.com/dairo707-maker/trodai-dictionaries/main/pt.json",
+        "OpenLexicon PT (Wiktionary CC-BY-SA)",
+        "https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI/releases/download/dictionaries-v1/pt.json.gz",
     ),
     LanguagePackInfo(
         "fr",
         "Francais",
-        "OpenLexicon FR (Wiktionary/Apache-2.0)",
-        "https://raw.githubusercontent.com/dairo707-maker/trodai-dictionaries/main/fr.json",
+        "OpenLexicon FR (Wiktionary CC-BY-SA)",
+        "https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI/releases/download/dictionaries-v1/fr.json.gz",
     ),
     LanguagePackInfo(
         "de",
         "Deutsch",
-        "OpenLexicon DE (Wiktionary/Apache-2.0)",
-        "https://raw.githubusercontent.com/dairo707-maker/trodai-dictionaries/main/de.json",
+        "OpenLexicon DE (Wiktionary CC-BY-SA)",
+        "https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI/releases/download/dictionaries-v1/de.json.gz",
     ),
     LanguagePackInfo(
         "it",
         "Italiano",
-        "OpenLexicon IT (Wiktionary/Apache-2.0)",
-        "https://raw.githubusercontent.com/dairo707-maker/trodai-dictionaries/main/it.json",
+        "OpenLexicon IT (Wiktionary CC-BY-SA)",
+        "https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI/releases/download/dictionaries-v1/it.json.gz",
     ),
 )
 
@@ -269,8 +272,45 @@ _BUNDLED_LEXICONS: dict[str, list[tuple[str, str, str, str]]] = {
         ("muestra", "sust.", "Porcion representativa tomada de un material u organismo para su analisis.", "especimen, ejemplo"),
         ("sangre", "sust.", "Tejido liquido vital que circula por vasos sanguineos transportando oxigeno y nutrientes.", "fluido sanguineo"),
         ("evolucion", "sust.", "Desarrollo gradual de un cuadro clinico, proceso o sistema a lo largo del tiempo.", "progreso, curso"),
-        ("folio", "sust.", "Hoja numerada de un expediente o libro oficial.", "pagina, lamina"),
-        ("ruta", "sust.", "Ubicacion jerarquica de carpetas y nombre de archivo en disco.", "directorio, camino"),
+        ("fondo", "sust.", "Superficie o plano posterior de una ventana, pagina o diseno grafico; tambien reserva economica.", "respaldo, plano posterior, capital"),
+        ("personalizable", "adj.", "Que puede adaptarse o configurarse segun las preferencias visuales o funcionales del usuario.", "configurable, adaptable"),
+        ("personalizar", "verbo", "Ajustar colores, fuentes, fondos o comportamiento de una aplicacion a gusto propio.", "configurar, adaptar"),
+        ("caracteristica", "sust.", "Cualidad, atributo o funcion distintiva que define a un programa, documento u objeto.", "atributo, propiedad, rasgo"),
+        ("herramienta", "sust.", "Funcion, utilidad o instrumento tecnico destinado a ejecutar una tarea especifica.", "utilidad, modulo, instrumento"),
+        ("anotacion", "sust.", "Comentario, subrayado o marca agregada sobre una pagina para registrar ideas.", "nota, apunte, observacion"),
+        ("nota", "sust.", "Apunte breve o ficha adhesiva colocada sobre un texto para recordar o aclarar algo.", "apunte, comentario, ficha"),
+        ("comentario", "sust.", "Explicacion o juicio breve asociado a un fragmento o anotacion de un documento.", "observacion, acotacion"),
+        ("adhesivo", "adj.", "Elemento visual que se fija sobre una pagina como una tarjeta movil o etiqueta.", "fijo, acoplable"),
+        ("categoria", "sust.", "Clase o grupo tematico empleado para ordenar notas, archivos o conceptos.", "clase, etiqueta, tipo"),
+        ("resaltado", "sust.", "Franja de color aplicada sobre texto relevante para destacarlo durante la lectura.", "subrayado, destacado"),
+        ("resaltar", "verbo", "Destacar palabras o parrafos con color para localizarlos rapidamente.", "subrayar, enfatizar"),
+        ("panel", "sust.", "Area lateral o flotante de la interfaz que agrupa controles y vistas auxiliares.", "barra, seccion, modulo"),
+        ("diccionario", "sust.", "Repertorio de terminos con definiciones, categoria gramatical y sinonimos.", "glosario, lexico"),
+        ("sugerencia", "sust.", "Propuesta aproximada o recomendacion generada para ayudar al usuario.", "propuesta, recomendacion"),
+        ("idioma", "sust.", "Sistema linguistico configurado para la interfaz o para consultar definiciones.", "lengua, lenguaje"),
+        ("actualizacion", "sust.", "Nueva version publicada que corrige fallos, mejora seguridad y anade funciones.", "parche, lanzamiento, mejora"),
+        ("actualizar", "verbo", "Instalar una version mas reciente de un programa o paquete de datos.", "renovar, mejorar"),
+        ("autoguardado", "sust.", "Respaldo automatico periodico de la sesion y cambios sin intervencion manual.", "guardado automatico"),
+        ("recuperacion", "sust.", "Restauracion automatica de pestanas y cambios tras un cierre inesperado.", "restauracion, rescate"),
+        ("tema", "sust.", "Conjunto coherente de colores, contraste y tipografia aplicado a la aplicacion.", "apariencia, estilo"),
+        ("opacidad", "sust.", "Grado de solidez o transparencia de un fondo o capa visual.", "transparencia, densidad"),
+        ("desenfoque", "sust.", "Efecto optico que suaviza los detalles de una imagen de fondo.", "difuminado, blur"),
+        ("nitido", "adj.", "Claro, bien definido y con bordes precisos sin distorsion ni borrosidad.", "claro, preciso, definido"),
+        ("arquitectonico", "adj.", "De lineas rectas, estructura modular y precision geometrica.", "estructural, modular"),
+        ("ventana", "sust.", "Marco grafico de la interfaz donde se muestran documentos, dialogos o paneles.", "cuadro, panel"),
+        ("archivo", "sust.", "Conjunto estructurado de bytes almacenado en disco bajo un nombre y extension.", "fichero, documento"),
+        ("pestana", "sust.", "Solapa superior que permite alternar entre multiples documentos abiertos.", "tab, ficha"),
+        ("margen", "sust.", "Espacio libre comprendido entre el contenido y el borde de una pagina.", "borde, contorno"),
+        ("borde", "sust.", "Linea o contorno que delimita una pagina, tarjeta o componente visual.", "contorno, marco"),
+        ("buscar", "verbo", "Localizar palabras, citas o elementos especificos dentro de un texto o indice.", "rastrear, consultar"),
+        ("exportar", "verbo", "Guardar datos, paginas o conversaciones en un formato externo portable.", "extraer, generar"),
+        ("importar", "verbo", "Incorporar archivos, glosarios o recursos externos dentro de la aplicacion.", "cargar, integrar"),
+        ("guardar", "verbo", "Almacenar de forma permanente cambios, anotaciones o configuraciones en disco.", "grabar, conservar"),
+        ("cerrar", "verbo", "Finalizar una vista, cuadro emergente o sesion activa de forma segura.", "clausurar, ocultar"),
+        ("borrar", "verbo", "Eliminar de manera definitiva un elemento, nota o historial tras confirmacion.", "suprimir, eliminar"),
+        ("copiar", "verbo", "Reproducir texto o datos seleccionados en el portapapeles del sistema.", "duplicar"),
+        ("historial", "sust.", "Registro cronologico de documentos abiertos o mensajes intercambiados.", "bitacora, registro"),
+        ("multipagina", "adj.", "Compuesto por varias hojas secuenciales dentro de un mismo archivo o vista.", "de varias paginas"),
     ],
     "en": [
         ("document", "noun", "A structured written or digital record conveying information or evidence.", "file, record, paper"),
@@ -336,6 +376,26 @@ _BUNDLED_LEXICONS: dict[str, list[tuple[str, str, str, str]]] = {
         ("backup", "noun", "Duplicate copy retained safely to restore lost or corrupted data.", "archive, copy"),
         ("export", "verb", "Save data or conversations into an external portable file format.", "output, extract"),
         ("history", "noun", "Chronological log of past events, clinical notes, or messages.", "log, timeline"),
+        ("background", "noun", "Visual backdrop plane behind page content or window controls.", "backdrop, canvas"),
+        ("customizable", "adj.", "Capable of being tailored visually or functionally to user preferences.", "configurable, adaptable"),
+        ("customize", "verb", "Modify theme colors, backdrops, fonts, or layouts to match preferences.", "configure, tailor"),
+        ("feature", "noun", "Distinct functional capability or component provided by software.", "capability, function"),
+        ("tool", "noun", "Focused utility designed to transform, split, merge, or inspect PDFs.", "utility, instrument"),
+        ("note", "noun", "Short written remark or draggable sticky card anchored to a PDF page.", "memo, remark, comment"),
+        ("sticky", "adj.", "Positioned directly onto a page surface and repositionable by dragging.", "pinned, movable"),
+        ("category", "noun", "Thematic group label used to organize and filter notes or records.", "group, label, tag"),
+        ("highlight", "noun", "Colored translucent overlay marking important text lines.", "markup, emphasis"),
+        ("panel", "noun", "Collapsible or docked side container hosting tools, notes, or chat.", "pane, drawer"),
+        ("suggestion", "noun", "Approximate candidate word offered when an exact term is absent.", "recommendation, match"),
+        ("update", "noun", "New signed release delivering fixes, security patches, and features.", "release, upgrade"),
+        ("autosave", "noun", "Automatic periodic backup of open tabs, edits, and scroll position.", "auto-backup"),
+        ("recovery", "noun", "Automatic restoration of the last saved workspace after an unexpected exit.", "restoration"),
+        ("theme", "noun", "Coordinated palette of colors, contrast levels, and typography.", "appearance, style"),
+        ("opacity", "noun", "Visual solidity vs transparency ratio applied to backdrop layers.", "alpha, transparency"),
+        ("blur", "noun", "Optical softening filter reducing background visual clutter.", "softening, haze"),
+        ("search", "verb", "Scan text indices or lexicons to locate matching terms quickly.", "query, find"),
+        ("save", "verb", "Persist document changes, annotations, and settings to disk.", "write, store"),
+        ("delete", "verb", "Permanently remove a selected note, item, or record after confirmation.", "remove, erase"),
     ],
 }
 
@@ -414,6 +474,59 @@ class DictionaryEngine:
         finally:
             conn.close()
 
+    def _candidate_lemmas(self, norm: str, lang: str = "es") -> list[str]:
+        cands: list[str] = [norm]
+        if len(norm) <= 3:
+            return cands
+        if lang == "es":
+            if norm.endswith("ces") and len(norm) > 5:
+                cands.append(norm[:-3] + "z")
+            if norm.endswith(("ables", "ibles", "bles")) and len(norm) > 6:
+                cands.append(norm[:-1])  # personalizables -> personalizable
+                stem = norm[:-5] if norm.endswith(("ables", "ibles")) else norm[:-4]
+                if len(stem) >= 3:
+                    cands.extend([stem + "ar", stem + "er", stem + "ir"])
+            if norm.endswith("mente") and len(norm) > 7:
+                base = norm[:-5]
+                cands.extend([base, base + "o", base + "a"])
+            if norm.endswith("aciones") and len(norm) > 8:
+                cands.append(norm[:-7] + "acion")
+            if norm.endswith("es") and len(norm) > 4:
+                cands.extend([norm[:-2], norm[:-1]])
+            if norm.endswith("s"):
+                cands.append(norm[:-1])
+            if norm.endswith(("os", "as")) and len(norm) > 4:
+                cands.extend([norm[:-2] + "o", norm[:-2] + "a"])
+            if norm.endswith(("o", "a")):
+                cands.append(norm[:-1] + ("a" if norm.endswith("o") else "o"))
+            if norm.endswith(("ando", "iendo")) and len(norm) > 6:
+                stem = norm[:-4] if norm.endswith("ando") else norm[:-5]
+                cands.extend([stem + "ar", stem + "er", stem + "ir"])
+            if norm.endswith(("ado", "ada", "ido", "ida")) and len(norm) > 5:
+                stem = norm[:-3]
+                cands.extend([stem + "ar", stem + "er", stem + "ir"])
+        else:
+            if norm.endswith("ies") and len(norm) > 5:
+                cands.append(norm[:-3] + "y")
+            if norm.endswith("es") and len(norm) > 4:
+                cands.extend([norm[:-2], norm[:-1]])
+            if norm.endswith("s"):
+                cands.append(norm[:-1])
+            if norm.endswith("ing") and len(norm) > 5:
+                cands.extend([norm[:-3], norm[:-3] + "e"])
+            if norm.endswith("ed") and len(norm) > 4:
+                cands.extend([norm[:-2], norm[:-1]])
+            if norm.endswith("able") and len(norm) > 6:
+                cands.extend([norm[:-4], norm[:-4] + "e"])
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in cands:
+            if item and item not in seen:
+                seen.add(item)
+                ordered.append(item)
+        return ordered
+
     def lookup(self, word: str, lang: str = "es") -> list[DictionaryEntry]:
         cleaned = (word or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/")
         norm = normalize_term(cleaned)
@@ -424,29 +537,14 @@ class DictionaryEngine:
             return []
         conn = sqlite3.connect(str(db))
         try:
-            rows = conn.execute(
-                "SELECT word, pos, definition, synonyms FROM entries WHERE norm = ? ORDER BY pos",
-                (norm,),
-            ).fetchall()
-            # Try simple Spanish/English plural or gender inflections if exact hit is absent
-            if not rows and len(norm) > 4 and norm.endswith("s"):
-                candidates = []
-                if norm.endswith("es") and len(norm) > 5:
-                    candidates.append(norm[:-2])
-                candidates.append(norm[:-1])
-                for cand in candidates:
-                    rows = conn.execute(
-                        "SELECT word, pos, definition, synonyms FROM entries WHERE norm = ? ORDER BY pos",
-                        (cand,),
-                    ).fetchall()
-                    if rows:
-                        break
-            if not rows and len(norm) > 4 and norm.endswith(("o", "a")):
-                alt = norm[:-1] + ("a" if norm.endswith("o") else "o")
+            rows = []
+            for cand in self._candidate_lemmas(norm, lang):
                 rows = conn.execute(
                     "SELECT word, pos, definition, synonyms FROM entries WHERE norm = ? ORDER BY pos",
-                    (alt,),
+                    (cand,),
                 ).fetchall()
+                if rows:
+                    break
             out: list[DictionaryEntry] = []
             for w, pos, dfn, syn in rows:
                 syns = tuple(s.strip() for s in syn.split(",") if s.strip())
@@ -456,23 +554,55 @@ class DictionaryEngine:
             conn.close()
 
     def suggest(self, prefix: str, lang: str = "es", *, limit: int = 8) -> list[str]:
-        norm = normalize_term(prefix)
+        return self.suggest_fuzzy(prefix, lang, limit=limit)
+
+    def suggest_fuzzy(self, query: str, lang: str = "es", *, limit: int = 8) -> list[str]:
+        """Return combined prefix + approximate phonetic/edit-distance suggestions."""
+        norm = normalize_term((query or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/"))
         db = self._db_path(lang)
         if not db.exists():
             return []
         conn = sqlite3.connect(str(db))
         try:
-            if norm:
-                rows = conn.execute(
-                    "SELECT DISTINCT word FROM entries WHERE norm LIKE ? ORDER BY norm LIMIT ?",
-                    (f"{norm}%", int(limit)),
-                ).fetchall()
-            else:
+            if not norm:
                 rows = conn.execute(
                     "SELECT DISTINCT word FROM entries ORDER BY norm LIMIT ?",
                     (int(limit),),
                 ).fetchall()
-            return [str(r[0]) for r in rows]
+                return [str(r[0]) for r in rows]
+
+            seen_lower: set[str] = set()
+            results: list[str] = []
+
+            def _add_word(w: str) -> None:
+                lw = normalize_term(w)
+                if lw and lw not in seen_lower and len(results) < int(limit):
+                    seen_lower.add(lw)
+                    results.append(w)
+
+            # 1. Exact prefix matches (full norm, then 4-char, 3-char, 2-char stems)
+            for pfx_len in sorted({len(norm), min(len(norm), 5), min(len(norm), 4), min(len(norm), 3), min(len(norm), 2)}, reverse=True):
+                if pfx_len < 2 or len(results) >= int(limit):
+                    continue
+                for (w,) in conn.execute(
+                    "SELECT DISTINCT word FROM entries WHERE norm LIKE ? ORDER BY norm LIMIT ?",
+                    (f"{norm[:pfx_len]}%", int(limit)),
+                ).fetchall():
+                    _add_word(str(w))
+
+            # 2. Fuzzy similarity matches via difflib across installed lexicon
+            if len(results) < int(limit):
+                all_rows = conn.execute("SELECT DISTINCT norm, word FROM entries").fetchall()
+                norm_to_word: dict[str, str] = {}
+                for n_val, w_val in all_rows:
+                    norm_to_word.setdefault(str(n_val), str(w_val))
+                close = difflib.get_close_matches(
+                    norm, list(norm_to_word.keys()), n=int(limit), cutoff=0.52
+                )
+                for n_hit in close:
+                    _add_word(norm_to_word[n_hit])
+
+            return results
         finally:
             conn.close()
 
@@ -570,11 +700,76 @@ class DictionaryEngine:
                     raise RuntimeError(f"Language pack download failed: {exc}") from curl_exc
 
         payload_bytes = (fetcher or _default_fetch)(info.url)
+        if payload_bytes[:2] == b"\x1f\x8b":
+            payload_bytes = gzip.decompress(payload_bytes)
         parsed = json.loads(payload_bytes.decode("utf-8"))
         rows = self._parse_pack_payload(parsed)
         if not rows:
             raise ValueError("Downloaded pack contained no entries")
         return self._seed_entries(lang, rows)
+
+    def lookup_online_wiktionary(
+        self,
+        word: str,
+        lang: str = "es",
+        *,
+        consent_granted: bool = False,
+        offline_only: bool = False,
+        fetcher: Callable[[str], bytes] | None = None,
+    ) -> list[DictionaryEntry]:
+        """Opt-in Wikimedia REST lookup that caches definitions into the local SQLite dictionary."""
+        if offline_only:
+            raise PermissionError("offline_only_enabled")
+        if not consent_granted and fetcher is None:
+            raise PermissionError("user_consent_required")
+        clean = (word or "").strip(" \t\r\n.,;:!?¡¿()[]{}\"'«»“”—–-•*/")
+        if not clean:
+            return []
+        lang_code = "".join(ch for ch in (lang or "es").lower() if ch.isalpha())[:4] or "es"
+        url = f"https://{lang_code}.wiktionary.org/api/rest_v1/page/definition/{quote(clean.lower())}"
+
+        def _fetch_wiki(target_url: str) -> bytes:
+            req = Request(
+                target_url,
+                headers={"User-Agent": "PDF-MD-Lector-by-TRODAI/0.2 (https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI)"},
+            )
+            with urlopen(req, timeout=10) as resp:
+                return resp.read(2 * 1024 * 1024)
+
+        raw_bytes = (fetcher or _fetch_wiki)(url)
+        payload = json.loads(raw_bytes.decode("utf-8"))
+        sections = payload.get(lang_code) if isinstance(payload, dict) else None
+        if not sections and isinstance(payload, dict):
+            # Fallback to first language section present
+            for val in payload.values():
+                if isinstance(val, list):
+                    sections = val
+                    break
+        if not isinstance(sections, list):
+            return []
+
+        seeded: list[tuple[str, str, str, str]] = []
+        entries: list[DictionaryEntry] = []
+        for sec in sections:
+            if not isinstance(sec, dict):
+                continue
+            pos = str(sec.get("partOfSpeech") or "term").strip().lower()[:18]
+            defs = sec.get("definitions") or []
+            for item in defs:
+                if not isinstance(item, dict):
+                    continue
+                raw_def = str(item.get("definition") or "")
+                plain_def = re.sub(r"<[^>]+>", "", raw_def).strip()
+                if plain_def:
+                    seeded.append((clean, pos, plain_def, ""))
+                    entries.append(DictionaryEntry(word=clean, lang=lang_code, pos=pos, definition=plain_def))
+                    break
+            if len(entries) >= 3:
+                break
+
+        if seeded:
+            self._seed_entries(lang_code, seeded, replace_existing=False)
+        return entries
 
     def remove_language_pack(self, lang: str) -> bool:
         info = _PACK_BY_CODE.get(lang)

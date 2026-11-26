@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import sys
 import tempfile
 
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QFrame,
@@ -25,6 +27,7 @@ from ..core.updater import (
     ReleaseInfo,
     check_for_updates,
     download_verified_update,
+    launch_detached_update,
     load_updater_state,
     save_updater_state,
 )
@@ -44,6 +47,7 @@ class AboutUpdaterDialog(QDialog):
         state_path: Path | None = None,
         has_unsaved_fn: Callable[[], bool] | None = None,
         has_active_tasks_fn: Callable[[], bool] | None = None,
+        initial_release: ReleaseInfo | None = None,
         lang: str = "es",
         mode: str = "dark",
         parent: QWidget | None = None,
@@ -57,7 +61,8 @@ class AboutUpdaterDialog(QDialog):
         self._has_unsaved_fn = has_unsaved_fn
         self._has_active_tasks_fn = has_active_tasks_fn
         self._state = load_updater_state(self._state_path)
-        self._latest_release: ReleaseInfo | None = None
+        self._latest_release: ReleaseInfo | None = initial_release
+        self._downloaded_installer_path: Path | None = None
 
         self.setWindowTitle(f"Acerca de y Actualizaciones · {APP_NAME}")
         self.setMinimumSize(560, 440)
@@ -131,12 +136,22 @@ class AboutUpdaterDialog(QDialog):
         self.download_btn.clicked.connect(self.download_current_release)
         btns.addWidget(self.download_btn)
 
+        self.install_btn = AdaptiveButton("Instalar y reiniciar ahora", self, role="PrimaryAction")
+        self.install_btn.setEnabled(False)
+        self.install_btn.clicked.connect(lambda: self.install_downloaded_release())
+        btns.addWidget(self.install_btn)
+
         self.close_btn = AdaptiveButton("Cerrar", self, role="GhostAction")
         self.close_btn.clicked.connect(self.accept)
         btns.addWidget(self.close_btn)
         root.addLayout(btns)
 
         self.apply_theme(self._mode)
+        if self._latest_release is not None and self._latest_release.update_available:
+            self.notes_view.setPlainText(self._latest_release.notes or f"Version {self._latest_release.version}")
+            self.update_tag.set_tone("ok", f"v{self._latest_release.version}")
+            self.status_lbl.setText(f"Nueva version disponible: v{self._latest_release.version}")
+            self.download_btn.setEnabled(bool(self._latest_release.asset_url and self._latest_release.sums_url))
 
     def _on_offline_toggled(self, checked: bool) -> None:
         self._state.offline_only = bool(checked)
@@ -163,10 +178,12 @@ class AboutUpdaterDialog(QDialog):
             self.update_tag.set_tone("ok", f"v{rel.version}")
             self.status_lbl.setText(f"Nueva version disponible: v{rel.version}")
             self.download_btn.setEnabled(bool(rel.asset_url and rel.sums_url))
+            self.install_btn.setEnabled(False)
         else:
             self.update_tag.set_tone("ok", "AL DIA")
             self.status_lbl.setText(f"Estas en la ultima version (v{self._current_version}).")
             self.download_btn.setEnabled(False)
+            self.install_btn.setEnabled(False)
         return rel
 
     def download_current_release(self) -> Path | None:
@@ -187,12 +204,46 @@ class AboutUpdaterDialog(QDialog):
                 offline_only=self.offline_only_checkbox.isChecked(),
                 progress_cb=self.progress_bar.setValue,
             )
-            self.status_lbl.setText(f"Paquete verificado SHA-256: {out}")
+            self._downloaded_installer_path = out
+            self.install_btn.setEnabled(True)
+            self.update_tag.set_tone("ok", "VERIFICADO")
+            self.status_lbl.setText(
+                f"Paquete verificado SHA-256: {out}. Haz clic en 'Instalar y reiniciar ahora'."
+            )
             return out
         except Exception as exc:
+            self._downloaded_installer_path = None
+            self.install_btn.setEnabled(False)
             self.update_tag.set_tone("risk", "ERROR SHA-256")
             self.status_lbl.setText(f"Actualizacion rechazada: {exc}")
             return None
+
+    def install_downloaded_release(
+        self,
+        *,
+        launcher: Callable[..., object] = launch_detached_update,
+        quit_callback: Callable[[], None] | None = None,
+    ) -> bool:
+        """Launch verified installer detached and request application quit for clean replacement."""
+        pkg = self._downloaded_installer_path
+        if pkg is None or not pkg.exists():
+            self.status_lbl.setText("Descarga y verifica primero el paquete SHA-256.")
+            return False
+        if self._has_unsaved_fn and self._has_unsaved_fn():
+            self.status_lbl.setText("Guarda tus cambios en PDF/Markdown antes de actualizar.")
+            return False
+        if self._has_active_tasks_fn and self._has_active_tasks_fn():
+            self.status_lbl.setText("Espera a que terminen las tareas activas antes de actualizar.")
+            return False
+        launcher(pkg, target_exe=Path(sys.executable))
+        self.status_lbl.setText("Instalador iniciado. Cerrando aplicacion para actualizar...")
+        if quit_callback is not None:
+            quit_callback()
+        elif QApplication.platformName() != "offscreen":
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+        return True
 
     def apply_theme(self, mode: str) -> None:
         self._mode = "light" if mode == "light" else "dark"
@@ -200,3 +251,4 @@ class AboutUpdaterDialog(QDialog):
         self.update_tag.apply_theme(self._mode)
         self.check_btn.setIcon(load_svg_icon("refresh", color=p["primary_fg"], size=14))
         self.download_btn.setIcon(load_svg_icon("download", color=p["icon_color"], size=14))
+        self.install_btn.setIcon(load_svg_icon("check", color=p["primary_fg"], size=14))

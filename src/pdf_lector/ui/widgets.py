@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtCore import QEasingCurve, QPoint, QRect, QRectF, QSize, QVariantAnimation, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
@@ -325,7 +326,8 @@ class ToolCard(QFrame):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self.tool_id)
-        super().mousePressEvent(event)
+        if shiboken6.isValid(self):
+            super().mousePressEvent(event)
 
 
 class SlidingSegmentedControl(QWidget):

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -32,6 +33,7 @@ from ..core.ai_chat_history import (
     format_chat_timestamp,
     local_chat_timestamp,
 )
+from ..core.ai_hardware import LocalAiHardwareReport, probe_local_ai_hardware
 from ..core.ai_rag import (
     DocumentRagIndex,
     RagAnswer,
@@ -58,11 +60,20 @@ _AI_TEXTS: dict[str, dict[str, str]] = {
         "question_placeholder": "Escribe una pregunta sobre el documento...",
         "ask": "Enviar",
         "tag_local": "BM25 LOCAL",
-        "tag_byok": "BYOK",
+        "tag_byok": "API BYOK",
+        "tag_mcp": "MCP OFICIAL",
+        "tag_hw_blocked": "HW NO APTO",
         "no_doc": "Abre primero un documento PDF o Markdown local valido.",
         "asking": "Analizando documento...",
         "key_saved": "Clave cifrada con DPAPI.",
         "key_cleared": "Clave eliminada.",
+        "legal_notice": "Uso legal y codigo abierto: solo se envian fragmentos con tu permiso explicito, respetando terminos de cada API/MCP.",
+        "hw_blocked_title": "LLM local no disponible en este equipo",
+        "hw_blocked_body": "{reason}\n{recommendation}",
+        "hw_use_bm25": "Usar BM25 Local",
+        "hw_use_openai": "Conectar OpenAI",
+        "hw_use_gemini": "Conectar Gemini",
+        "hw_use_mcp": "Conectar MCP",
         "clear_chat": "Borrar historial del documento",
         "clear_confirm": "Borrar todo el historial de conversacion guardado para este documento?",
         "chat_cleared": "Historial del documento borrado.",
@@ -86,11 +97,20 @@ _AI_TEXTS: dict[str, dict[str, str]] = {
         "question_placeholder": "Write a question about the document...",
         "ask": "Send",
         "tag_local": "LOCAL BM25",
-        "tag_byok": "BYOK",
+        "tag_byok": "BYOK API",
+        "tag_mcp": "OFFICIAL MCP",
+        "tag_hw_blocked": "HW LIMITED",
         "no_doc": "Open a valid local PDF or Markdown document first.",
         "asking": "Analyzing document...",
         "key_saved": "Key encrypted via DPAPI.",
         "key_cleared": "Key removed.",
+        "legal_notice": "Open-source & Terms compliant: excerpts are sent only with explicit consent under your provider API/MCP terms.",
+        "hw_blocked_title": "Local LLM unavailable on this PC",
+        "hw_blocked_body": "{reason}\n{recommendation}",
+        "hw_use_bm25": "Use Local BM25",
+        "hw_use_openai": "Connect OpenAI",
+        "hw_use_gemini": "Connect Gemini",
+        "hw_use_mcp": "Connect MCP",
         "clear_chat": "Clear document history",
         "clear_confirm": "Delete all saved chat history for this document?",
         "chat_cleared": "Document history cleared.",
@@ -114,11 +134,20 @@ _AI_TEXTS: dict[str, dict[str, str]] = {
         "question_placeholder": "Escreva uma pergunta sobre o documento...",
         "ask": "Enviar",
         "tag_local": "BM25 LOCAL",
-        "tag_byok": "BYOK",
+        "tag_byok": "API BYOK",
+        "tag_mcp": "MCP OFICIAL",
+        "tag_hw_blocked": "HW LIMITADO",
         "no_doc": "Abra um documento PDF ou Markdown local valido primeiro.",
         "asking": "Analisando documento...",
         "key_saved": "Chave protegida com DPAPI.",
         "key_cleared": "Chave removida.",
+        "legal_notice": "Codigo aberto e termos legais: trechos enviados apenas com consentimento explicito sob os termos oficiais de cada API/MCP.",
+        "hw_blocked_title": "LLM local indisponivel neste PC",
+        "hw_blocked_body": "{reason}\n{recommendation}",
+        "hw_use_bm25": "Usar BM25 Local",
+        "hw_use_openai": "Conectar OpenAI",
+        "hw_use_gemini": "Conectar Gemini",
+        "hw_use_mcp": "Conectar MCP",
         "clear_chat": "Limpar historico do documento",
         "clear_confirm": "Excluir todo o historico salvo para este documento?",
         "chat_cleared": "Historico do documento limpo.",
@@ -210,6 +239,7 @@ class AskDocumentPanel(QWidget):
         mode: str = "dark",
         lang: str = "es",
         history_store: AiChatHistoryStore | None = None,
+        hardware_report: LocalAiHardwareReport | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -220,6 +250,7 @@ class AskDocumentPanel(QWidget):
         self._mode = "light" if mode == "light" else "dark"
         self._lang = lang if lang in ("es", "en", "pt") else "es"
         self._history_store = history_store or AiChatHistoryStore()
+        self._hardware_report = hardware_report or probe_local_ai_hardware()
         self._active_doc_path: Path | None = None
         self._messages: list[ChatMessage] = []
         self._pool = QThreadPool.globalInstance()
@@ -241,7 +272,7 @@ class AskDocumentPanel(QWidget):
         hdr.addWidget(self._icon_lbl)
 
         self.title_lbl = QLabel(_tr("title", self._lang), self._header_frame)
-        self.title_lbl.setFont(QFont(UI_FONT_FAMILY, 11, QFont.Weight.Bold))
+        self.title_lbl.setFont(QFont(UI_FONT_FAMILY, 9, QFont.Weight.Bold))
         hdr.addWidget(self.title_lbl, 1)
 
         self.mode_tag = StatusTag(_tr("tag_local", self._lang), tone="ok", parent=self._header_frame)
@@ -277,15 +308,63 @@ class AskDocumentPanel(QWidget):
         prov_row.addWidget(self.provider_lbl)
 
         self.provider_combo = QComboBox(self)
-        self.provider_combo.addItem("Local BM25 (100% Offline)", "local_bm25")
-        self.provider_combo.addItem("Ollama (Local Loopback)", "ollama")
-        self.provider_combo.addItem("OpenAI (BYOK)", "openai")
-        self.provider_combo.addItem("Gemini (BYOK)", "gemini")
-        self.provider_combo.addItem("Anthropic Claude (BYOK)", "anthropic")
+        self.provider_combo.addItem("Local BM25 (100% Offline, 0 GPU)", "local_bm25")
+        self.provider_combo.addItem("OpenAI (API Oficial BYOK)", "openai")
+        self.provider_combo.addItem("Gemini (API Oficial BYOK)", "gemini")
+        self.provider_combo.addItem("Anthropic Claude (API Oficial BYOK)", "anthropic")
+        self.provider_combo.addItem("Servidor MCP Oficial (JSON-RPC)", "mcp_official")
         self.provider_combo.addItem("OpenAI-Compatible (BYOK)", "openai_compatible")
+        self.provider_combo.addItem("Ollama (LLM Local)", "ollama")
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         prov_row.addWidget(self.provider_combo, 1)
         root.addLayout(prov_row)
+
+        # Hardware capability gate card for local generative LLM (Ollama)
+        self._hw_gate_box = QFrame(self)
+        self._hw_gate_box.setObjectName("HwGateBox")
+        hw_layout = QVBoxLayout(self._hw_gate_box)
+        hw_layout.setContentsMargins(8, 8, 8, 8)
+        hw_layout.setSpacing(6)
+
+        self.hw_gate_title = QLabel(_tr("hw_blocked_title", self._lang), self._hw_gate_box)
+        self.hw_gate_title.setFont(QFont(UI_FONT_FAMILY, 10, QFont.Weight.Bold))
+        self.hw_gate_title.setWordWrap(True)
+        hw_layout.addWidget(self.hw_gate_title)
+
+        self.hw_gate_body = QLabel(self._hw_gate_box)
+        self.hw_gate_body.setProperty("tone", "secondary")
+        self.hw_gate_body.setWordWrap(True)
+        hw_layout.addWidget(self.hw_gate_body)
+
+        hw_btns = QGridLayout()
+        hw_btns.setHorizontalSpacing(6)
+        hw_btns.setVerticalSpacing(6)
+        self.hw_bm25_btn = AdaptiveButton(_tr("hw_use_bm25", self._lang), self._hw_gate_box, role="PrimaryAction")
+        self.hw_bm25_btn.setMinimumHeight(26)
+        self.hw_bm25_btn.setStyleSheet("padding: 3px 6px; font-size: 11px;")
+        self.hw_bm25_btn.clicked.connect(lambda: self._switch_provider("local_bm25"))
+        hw_btns.addWidget(self.hw_bm25_btn, 0, 0)
+
+        self.hw_openai_btn = AdaptiveButton(_tr("hw_use_openai", self._lang), self._hw_gate_box, role="GhostAction")
+        self.hw_openai_btn.setMinimumHeight(26)
+        self.hw_openai_btn.setStyleSheet("padding: 3px 6px; font-size: 11px;")
+        self.hw_openai_btn.clicked.connect(lambda: self._switch_provider("openai"))
+        hw_btns.addWidget(self.hw_openai_btn, 0, 1)
+
+        self.hw_gemini_btn = AdaptiveButton(_tr("hw_use_gemini", self._lang), self._hw_gate_box, role="GhostAction")
+        self.hw_gemini_btn.setMinimumHeight(26)
+        self.hw_gemini_btn.setStyleSheet("padding: 3px 6px; font-size: 11px;")
+        self.hw_gemini_btn.clicked.connect(lambda: self._switch_provider("gemini"))
+        hw_btns.addWidget(self.hw_gemini_btn, 1, 0)
+
+        self.hw_mcp_btn = AdaptiveButton(_tr("hw_use_mcp", self._lang), self._hw_gate_box, role="GhostAction")
+        self.hw_mcp_btn.setMinimumHeight(26)
+        self.hw_mcp_btn.setStyleSheet("padding: 3px 6px; font-size: 11px;")
+        self.hw_mcp_btn.clicked.connect(lambda: self._switch_provider("mcp_official"))
+        hw_btns.addWidget(self.hw_mcp_btn, 1, 1)
+        hw_layout.addLayout(hw_btns)
+        self._hw_gate_box.setVisible(False)
+        root.addWidget(self._hw_gate_box)
 
         self._byok_box = QFrame(self)
         self._byok_box.setObjectName("ByokConfigBox")
@@ -315,6 +394,12 @@ class AskDocumentPanel(QWidget):
         self.consent_checkbox = QCheckBox(_tr("consent", self._lang), self._byok_box)
         self.consent_checkbox.setChecked(False)
         byok_layout.addWidget(self.consent_checkbox)
+
+        self.legal_notice_lbl = QLabel(_tr("legal_notice", self._lang), self._byok_box)
+        self.legal_notice_lbl.setProperty("tone", "muted")
+        self.legal_notice_lbl.setWordWrap(True)
+        self.legal_notice_lbl.setFont(QFont(UI_FONT_FAMILY, 8))
+        byok_layout.addWidget(self.legal_notice_lbl)
 
         root.addWidget(self._byok_box)
 
@@ -386,14 +471,53 @@ class AskDocumentPanel(QWidget):
             self._messages = []
         self._render_conversation_html()
 
+    def _switch_provider(self, provider_id: str) -> None:
+        idx = self.provider_combo.findData(provider_id)
+        if idx >= 0:
+            self.provider_combo.setCurrentIndex(idx)
+
+    def _is_ollama_blocked(self) -> bool:
+        return self.current_provider() == "ollama" and not self._hardware_report.eligible_for_local_llm
+
     def _on_provider_changed(self) -> None:
         prov = self.current_provider()
-        is_local = prov == "local_bm25"
-        self._byok_box.setVisible(not is_local)
-        self.mode_tag.setText(_tr("tag_local", self._lang) if is_local else _tr("tag_byok", self._lang))
-        if not is_local:
+        is_local_bm25 = prov == "local_bm25"
+        ollama_blocked = self._is_ollama_blocked()
+        self._hw_gate_box.setVisible(ollama_blocked)
+        if ollama_blocked:
+            self.hw_gate_title.setText(_tr("hw_blocked_title", self._lang))
+            self.hw_gate_body.setText(
+                _tr(
+                    "hw_blocked_body",
+                    self._lang,
+                    reason=self._hardware_report.reason,
+                    recommendation=self._hardware_report.recommendation,
+                )
+            )
+            self._byok_box.setVisible(False)
+            self.mode_tag.set_tone("risk", _tr("tag_hw_blocked", self._lang))
+            self.ask_btn.setEnabled(False)
+            self.status_lbl.setText(self._hardware_report.reason)
+            return
+
+        self.ask_btn.setEnabled(True)
+        self._byok_box.setVisible(not is_local_bm25)
+        if is_local_bm25:
+            self.mode_tag.set_tone("ok", _tr("tag_local", self._lang))
+        elif prov == "mcp_official":
+            self.mode_tag.set_tone("warn", _tr("tag_mcp", self._lang))
+        else:
+            self.mode_tag.set_tone("warn", _tr("tag_byok", self._lang))
+
+        if not is_local_bm25:
             existing = load_byok_key(prov)
             self.api_key_edit.setText(existing or "")
+            if prov == "mcp_official" and not self.endpoint_edit.text().strip():
+                self.endpoint_edit.setPlaceholderText("http://127.0.0.1:8787/mcp")
+            else:
+                self.endpoint_edit.setPlaceholderText(_tr("endpoint_placeholder", self._lang))
+        if self.status_lbl.text() == self._hardware_report.reason:
+            self.status_lbl.setText("")
 
     def _on_save_key(self) -> None:
         prov = self.current_provider()
@@ -412,6 +536,9 @@ class AskDocumentPanel(QWidget):
         self.status_lbl.setText(_tr("key_cleared", self._lang))
 
     def ask_current_question(self) -> None:
+        if self._is_ollama_blocked():
+            self.status_lbl.setText(self._hardware_report.reason)
+            return
         question = self.question_edit.text().strip()
         if not question:
             return
@@ -663,7 +790,7 @@ class AskDocumentPanel(QWidget):
                 background-color: {p["bg_hover"]};
                 border-color: {p["border_selected"]};
             }}
-            QFrame#ByokConfigBox, QFrame#AskComposerBox {{
+            QFrame#ByokConfigBox, QFrame#AskComposerBox, QFrame#HwGateBox {{
                 background-color: {p["bg_glass"]};
                 border: 1px solid {p["border_strong"]};
             }}
@@ -698,6 +825,12 @@ class AskDocumentPanel(QWidget):
         self.endpoint_edit.setPlaceholderText(_tr("endpoint_placeholder", self._lang))
         self.save_key_btn.setText(_tr("save_key", self._lang))
         self.clear_key_btn.setText(_tr("clear_key", self._lang))
+        self.legal_notice_lbl.setText(_tr("legal_notice", self._lang))
+        self.hw_gate_title.setText(_tr("hw_blocked_title", self._lang))
+        self.hw_bm25_btn.setText(_tr("hw_use_bm25", self._lang))
+        self.hw_openai_btn.setText(_tr("hw_use_openai", self._lang))
+        self.hw_gemini_btn.setText(_tr("hw_use_gemini", self._lang))
+        self.hw_mcp_btn.setText(_tr("hw_use_mcp", self._lang))
         self.question_edit.setPlaceholderText(_tr("question_placeholder", self._lang))
         self.ask_btn.setToolTip(_tr("ask", self._lang))
         if self._active_doc_path is None:

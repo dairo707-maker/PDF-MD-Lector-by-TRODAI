@@ -41,6 +41,7 @@ from ..theme.palette import UI_FONT_FAMILY, get_palette
 from ..theme.theme_profile import ThemeProfile
 from .dictionary_panel import DictionaryPanel
 from .md_tab_page import MarkdownTabPage
+from .notes_panel import NotesPanel
 from .pdf_canvas import CLASSIC_HIGHLIGHT_PALETTE, PdfCanvas, SharedAnnotationState
 from .svg_icons import load_svg_icon
 from .widgets import AdaptiveButton, FlowLayout, StatusTag
@@ -58,6 +59,7 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.tool.touch_write": "Escribir tactil",
         "viewer.tool.undo": "Deshacer",
         "viewer.rail.ink_tools": "Tinta y anotacion",
+        "viewer.rail.notes": "Notas",
         "viewer.rail.ai": "Preguntar IA",
         "viewer.rail.settings": "Configuracion",
         "viewer.rail.detach": "Desacoplar panel",
@@ -79,6 +81,7 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.tool.touch_write": "Touch writing",
         "viewer.tool.undo": "Undo",
         "viewer.rail.ink_tools": "Ink & Drawing",
+        "viewer.rail.notes": "Notes",
         "viewer.rail.ai": "Ask AI",
         "viewer.rail.settings": "Settings",
         "viewer.rail.detach": "Detach panel",
@@ -100,6 +103,7 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.tool.touch_write": "Escrita tatil",
         "viewer.tool.undo": "Desfazer",
         "viewer.rail.ink_tools": "Tinta e desenho",
+        "viewer.rail.notes": "Notas",
         "viewer.rail.ai": "Perguntar IA",
         "viewer.rail.settings": "Configuracoes",
         "viewer.rail.detach": "Desacoplar painel",
@@ -188,6 +192,7 @@ class PdfTabPage(QWidget):
         self.rotation = 0
         self._lang = "es"
         self._mode = "dark"
+        self._applied_theme_mode = ""
         self._continuous_scroll = bool(continuous_scroll)
         self._rail_visible = False
         self._rail_mode = "thumbs"
@@ -201,6 +206,7 @@ class PdfTabPage(QWidget):
         self._rendered_signatures: dict[int, tuple[float, int]] = {}
         self._profile = ThemeProfile()
         self._shared_ann_store = SharedAnnotationState()
+        self.shared_annotations = self._shared_ann_store
         self._programmatic_scroll = False
 
         root = QHBoxLayout(self)
@@ -1091,6 +1097,7 @@ class ViewerView(QWidget):
     preferences_requested = Signal()
     active_document_changed = Signal(object)
     document_opened = Signal(object, int)
+    document_edited = Signal()
 
     def __init__(
         self,
@@ -1098,17 +1105,20 @@ class ViewerView(QWidget):
         bookmarks_store: BookmarksStore | None = None,
         dictionary_engine: DictionaryEngine | None = None,
         guard: MotionPerformanceGuard | None = None,
+        offline_only_getter=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._lang = "es"
         self._mode = "dark"
+        self._applied_theme_mode = ""
         self._is_fullscreen = False
         self._show_button_labels = False
         self._continuous_scroll = True
         self._bookmarks = bookmarks_store or BookmarksStore()
         self._dict_engine = dictionary_engine or DictionaryEngine()
         self._guard = guard or MotionPerformanceGuard()
+        self._offline_only_getter = offline_only_getter
         self._profile = ThemeProfile()
         self._is_dict_detached = False
         self._floating_dict_win: _FloatingPaneWindow | None = None
@@ -1206,7 +1216,11 @@ class ViewerView(QWidget):
         left_col.addWidget(self.empty_lbl)
         self._body_row.addLayout(left_col, 1)
 
-        self.dict_panel = DictionaryPanel(self._dict_engine, parent=self)
+        self.dict_panel = DictionaryPanel(
+            self._dict_engine,
+            offline_only_getter=self._offline_only_getter,
+            parent=self,
+        )
         self.dict_panel.setVisible(False)
         self.dict_panel.word_looked_up.connect(self.dictionary_lookup_recorded.emit)
         self.dict_panel.close_requested.connect(lambda: QTimer.singleShot(0, self._handle_panel_close_requested))
@@ -1214,6 +1228,14 @@ class ViewerView(QWidget):
             lambda want: QTimer.singleShot(0, lambda w=want: self._handle_panel_detach_toggle(w))
         )
         self._body_row.addWidget(self.dict_panel)
+
+        self.notes_panel = NotesPanel(mode=self._mode, lang=self._lang, parent=self)
+        self.notes_panel.setVisible(False)
+        self.notes_panel.close_requested.connect(lambda: self.set_notes_panel_visible(False))
+        self.notes_panel.jump_to_note_requested.connect(self._jump_to_note)
+        self.notes_panel.add_note_requested.connect(self._add_note_from_panel)
+        self.notes_panel.delete_note_requested.connect(self._delete_note_from_panel)
+        self._body_row.addWidget(self.notes_panel)
 
         # Adobe-Style Right Vertical Tool Rail
         self.right_rail = QFrame(self)
@@ -1243,6 +1265,12 @@ class ViewerView(QWidget):
         self.ink_rail_btn.setCheckable(True)
         self.ink_rail_btn.clicked.connect(self._toggle_ink_bar)
         rr_lay.addWidget(self.ink_rail_btn)
+
+        self.notes_rail_btn = QPushButton("", self.right_rail)
+        self.notes_rail_btn.setProperty("role", "ModeTab")
+        self.notes_rail_btn.setCheckable(True)
+        self.notes_rail_btn.clicked.connect(self.set_notes_panel_visible)
+        rr_lay.addWidget(self.notes_rail_btn)
 
         self.dict_btn = QPushButton("", self.right_rail)
         self.dict_btn.setProperty("role", "ModeTab")
@@ -1312,6 +1340,7 @@ class ViewerView(QWidget):
             (self.thumbs_rail_btn, _tv("viewer.rail.thumbs_title", self._lang)),
             (self.toc_rail_btn, _tv("viewer.rail.toc_title", self._lang)),
             (self.ink_rail_btn, _tv("viewer.rail.ink_tools", self._lang)),
+            (self.notes_rail_btn, _tv("viewer.rail.notes", self._lang)),
             (self.dict_btn, t("viewer.dictionary", self._lang)),
             (self.ai_rail_btn, _tv("viewer.rail.ai", self._lang)),
             (self.backdrop_btn, t("viewer.backdrop_toggle", self._lang)),
@@ -1452,6 +1481,8 @@ class ViewerView(QWidget):
                 dirty = w.has_unsaved_changes()
                 self.tabs.setTabText(idx, f"* {base}" if dirty else base)
         self._sync_toolbar_state()
+        self._sync_notes_panel()
+        self.document_edited.emit()
 
     def _on_tab_page_words(self, words: list[str]) -> None:
         sender = self.sender()
@@ -1461,6 +1492,7 @@ class ViewerView(QWidget):
     def _on_active_tab_changed(self) -> None:
         self._sync_toolbar_state()
         self._sync_right_rail_state()
+        self._sync_notes_panel()
         tab = self._current_tab()
         if isinstance(tab, PdfTabPage):
             tab.emit_current_page_words()
@@ -1555,6 +1587,52 @@ class ViewerView(QWidget):
             btn.setEnabled(tab is not None)
             btn.blockSignals(False)
         self.ink_rail_btn.setEnabled(is_pdf)
+        self.notes_rail_btn.setEnabled(is_pdf)
+        self.notes_rail_btn.blockSignals(True)
+        self.notes_rail_btn.setChecked(self.notes_panel.isVisible() if is_pdf else False)
+        self.notes_rail_btn.blockSignals(False)
+
+    def set_notes_panel_visible(self, visible: bool) -> None:
+        want = bool(visible)
+        self.notes_panel.setVisible(want)
+        self.notes_rail_btn.blockSignals(True)
+        self.notes_rail_btn.setChecked(want)
+        self.notes_rail_btn.blockSignals(False)
+        if want:
+            self._sync_notes_panel()
+
+    def _sync_notes_panel(self) -> None:
+        if not shiboken6.isValid(self.notes_panel):
+            return
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            self.notes_panel.set_notes(tab.shared_annotations.records)
+        else:
+            self.notes_panel.set_notes([])
+
+    def _jump_to_note(self, page_index: int, note_id: str) -> None:
+        tab = self._current_tab()
+        if not isinstance(tab, PdfTabPage):
+            return
+        tab.set_page(page_index)
+        tab.pdf_canvas.open_sticky_note_card(note_id)
+
+    def _add_note_from_panel(self, content: str, category: str, color_hex: str) -> None:
+        tab = self._current_tab()
+        if not isinstance(tab, PdfTabPage):
+            return
+        rec = tab.pdf_canvas.add_sticky_note((72.0, 680.0), content, color_hex=color_hex, category=category)
+        self._sync_notes_panel()
+        self.document_edited.emit()
+        tab.pdf_canvas.open_sticky_note_card(rec.id)
+
+    def _delete_note_from_panel(self, note_id: str) -> None:
+        tab = self._current_tab()
+        if not isinstance(tab, PdfTabPage):
+            return
+        tab.pdf_canvas.delete_annotation(note_id)
+        self._sync_notes_panel()
+        self.document_edited.emit()
 
     def _step_zoom(self, delta: float) -> None:
         tab = self._current_tab()
@@ -1740,6 +1818,7 @@ class ViewerView(QWidget):
         self.set_fullscreen_state(self._is_fullscreen)
         self.empty_lbl.setText(_tv("viewer.empty_dual", lang))
         self.dict_panel.retranslate(lang)
+        self.notes_panel.retranslate(lang)
         if self._floating_dict_win is not None and shiboken6.isValid(self._floating_dict_win):
             self._floating_dict_win.setWindowTitle(_tv("dict.floating_title", lang))
         for idx in range(self.tabs.count()):
@@ -1756,29 +1835,33 @@ class ViewerView(QWidget):
         self.backdrop_btn.setChecked(profile.apply_to_viewer_backdrop)
         self.backdrop_btn.blockSignals(False)
 
-        self.open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
-        self.save_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=15))
-        self.zoom_out_btn.setIcon(load_svg_icon("zoom_out", color=p["icon_color"], size=15))
-        self.zoom_in_btn.setIcon(load_svg_icon("zoom_in", color=p["icon_color"], size=15))
-        self.fit_btn.setIcon(load_svg_icon("fit_width", color=p["icon_color"], size=15))
-        self.prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=15))
-        self.next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=15))
-        self.rotate_btn.setIcon(load_svg_icon("rotate", color=p["icon_color"], size=15))
+        if self._mode != self._applied_theme_mode:
+            self._applied_theme_mode = self._mode
+            self.open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
+            self.save_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=15))
+            self.zoom_out_btn.setIcon(load_svg_icon("zoom_out", color=p["icon_color"], size=15))
+            self.zoom_in_btn.setIcon(load_svg_icon("zoom_in", color=p["icon_color"], size=15))
+            self.fit_btn.setIcon(load_svg_icon("fit_width", color=p["icon_color"], size=15))
+            self.prev_btn.setIcon(load_svg_icon("prev", color=p["icon_color"], size=15))
+            self.next_btn.setIcon(load_svg_icon("next", color=p["icon_color"], size=15))
+            self.rotate_btn.setIcon(load_svg_icon("rotate", color=p["icon_color"], size=15))
 
-        self.thumbs_rail_btn.setIcon(load_svg_icon("thumbs", color=p["icon_color"], size=15))
-        self.toc_rail_btn.setIcon(load_svg_icon("toc", color=p["icon_color"], size=15))
-        self.ink_rail_btn.setIcon(load_svg_icon("ink", color=p["icon_color"], size=15))
-        self.dict_btn.setIcon(load_svg_icon("book", color=p["icon_color"], size=15))
-        self.ai_rail_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=15))
-        self.backdrop_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
-        self.settings_rail_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=15))
-        self.set_fullscreen_state(self._is_fullscreen)
+            self.thumbs_rail_btn.setIcon(load_svg_icon("thumbs", color=p["icon_color"], size=15))
+            self.toc_rail_btn.setIcon(load_svg_icon("toc", color=p["icon_color"], size=15))
+            self.ink_rail_btn.setIcon(load_svg_icon("ink", color=p["icon_color"], size=15))
+            self.notes_rail_btn.setIcon(load_svg_icon("comment", color=p["icon_color"], size=15))
+            self.dict_btn.setIcon(load_svg_icon("book", color=p["icon_color"], size=15))
+            self.ai_rail_btn.setIcon(load_svg_icon("ai_spark", color=p["icon_color"], size=15))
+            self.backdrop_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
+            self.settings_rail_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=15))
+            self.set_fullscreen_state(self._is_fullscreen)
 
-        self.zoom_tag.apply_theme(self._mode)
-        self.page_tag.apply_theme(self._mode)
-        self.dict_panel.apply_theme(self._mode)
-        if self._floating_dict_win is not None and shiboken6.isValid(self._floating_dict_win):
-            self._floating_dict_win.apply_theme(self._mode)
+            self.zoom_tag.apply_theme(self._mode)
+            self.page_tag.apply_theme(self._mode)
+            self.dict_panel.apply_theme(self._mode)
+            self.notes_panel.apply_theme(self._mode)
+            if self._floating_dict_win is not None and shiboken6.isValid(self._floating_dict_win):
+                self._floating_dict_win.apply_theme(self._mode)
 
         for idx in range(self.tabs.count()):
             tab = self.tabs.widget(idx)

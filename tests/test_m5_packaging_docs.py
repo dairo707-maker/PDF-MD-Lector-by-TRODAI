@@ -35,7 +35,7 @@ def _load_build_exe_module():
 
 def test_m5_packaging_build_exe_args_excludes_and_dry_run(tmp_path: Path) -> None:
     build_mod = _load_build_exe_module()
-    assert build_mod.read_version() == "0.1.0"
+    assert build_mod.read_version() == "0.2.0"
 
     ico = build_mod.ensure_app_icon()
     assert ico.exists() and ico.name == "pdf_lector.ico"

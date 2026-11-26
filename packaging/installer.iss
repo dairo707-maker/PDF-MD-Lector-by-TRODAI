@@ -1,6 +1,6 @@
 ; Inno Setup 6 script for PDF/MD Lector by TRODAI — Multilingual Per-User Windows 11 Installer
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "0.2.0"
 #endif
 
 #define MyAppName "PDF/MD Lector"

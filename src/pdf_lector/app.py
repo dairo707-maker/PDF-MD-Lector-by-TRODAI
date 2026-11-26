@@ -339,11 +339,15 @@ def launch_app(argv: list[str] | None = None) -> int:
         assert isinstance(win, MainWindow)
         if splash is not None:
             splash.set_progress(82, t("splash.step.viewer", profile.language))
+        crashed = bool(crash_guard is not None and crash_guard.previous_report.previous_crashed)
+        recovered_count = 0
+        if not args.doc_path:
+            recovered_count = win.recover_previous_session(previous_crashed=crashed)
         if args.doc_path:
             opened = win.open_document_path(Path(args.doc_path), switch_to_viewer=True)
-            if not opened:
+            if not opened and recovered_count == 0:
                 win.ensure_sample_pdf_loaded()
-        else:
+        elif recovered_count == 0:
             win.ensure_sample_pdf_loaded()
         if splash is not None:
             splash.set_progress(95, t("splash.step.ready", profile.language))
@@ -357,6 +361,8 @@ def launch_app(argv: list[str] | None = None) -> int:
             win.show()
         else:
             splash.finish_and_close(win)
+        if QApplication.platformName() != "offscreen":
+            QTimer.singleShot(1500, win.start_background_update_check)
 
     def _on_about_to_quit() -> None:
         if crash_guard is not None:
