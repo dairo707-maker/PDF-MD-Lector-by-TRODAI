@@ -1,0 +1,34 @@
+name: Feature Request
+description: Propose a new local-first PDF/Markdown tool or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Functional Area
+      options:
+        - PDF Viewer & Annotations (ISO 32000)
+        - Markdown Editor / Preview / Conversion
+        - Modular PDF Tools Suite
+        - Dual-Profile Invoices (DIAN UBL 2.1 / Factur-X)
+        - Offline Dictionary & Language Packs
+        - CLI / Local REST API / Browser Extension / MCP
+        - Theme Studio & Accessibility
+        - Packaging & Code Signing
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What workflow or limitation does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Local-First Behavior
+      description: Describe the expected UX/API behavior and confirm whether any network access would require an explicit consent toggle.
+    validations:
+      required: true

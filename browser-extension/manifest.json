@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "PDF/MD Lector by TRODAI",
+  "short_name": "PDF/MD Lector",
+  "version": "0.1.0",
+  "description": "Local-first bridge to open PDFs, capture web pages to PDF, and run quick PDF actions in PDF/MD Lector by TRODAI.",
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "contextMenus",
+    "scripting"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "PDF/MD Lector by TRODAI",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
