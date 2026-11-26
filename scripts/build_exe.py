@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from PIL import Image, ImageDraw
 
@@ -19,6 +20,7 @@ DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 
 PORTABLE_EXE_NAME = "PDF-MD-Lector-Portable"
+APP_BUNDLE_NAME = "PDF-MD-Lector"
 SETUP_EXE_NAME = "PDF-MD-Lector-Setup"
 
 # Qt modules unused by PDF/MD Lector (Markdown uses nh3 + QTextBrowser instead of QtWebEngine).
@@ -127,37 +129,93 @@ def ensure_app_icon() -> Path:
     return ico_path
 
 
-def generate_installer_wizard_images(output_dir: Path | None = None) -> tuple[Path, Path]:
-    """Generate 0px TRODAI Obsidian Navy BMP banners for Inno Setup WizardImageFile & WizardSmallImageFile."""
-    target_dir = output_dir if output_dir is not None else (ASSETS / "icons")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    large_path = target_dir / "wizard_large.bmp"
-    small_path = target_dir / "wizard_small.bmp"
+def _render_svg_logo_rgba(size: int) -> Image.Image:
+    """Render assets/icons/pdf_lector_logo.svg with 4x supersampled anti-aliasing (or Pillow fallback)."""
+    svg_path = ASSETS / "icons" / "pdf_lector_logo.svg"
+    if svg_path.exists():
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtGui import QGuiApplication, QImage, QPainter
+            from PySide6.QtSvg import QSvgRenderer
 
-    large = Image.new("RGB", (164, 314), (10, 15, 29))
+            created_app = False
+            if QGuiApplication.instance() is None:
+                os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+                QGuiApplication([])
+                created_app = True
+            del created_app
+
+            hi = max(64, size * 4)
+            qimg = QImage(hi, hi, QImage.Format.Format_RGBA8888)
+            qimg.fill(Qt.GlobalColor.transparent)
+            renderer = QSvgRenderer(str(svg_path))
+            if renderer.isValid():
+                painter = QPainter(qimg)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                renderer.render(painter)
+                painter.end()
+                raw_bytes = bytes(qimg.constBits()[: hi * hi * 4])
+                pil_hi = Image.frombytes("RGBA", (hi, hi), raw_bytes, "raw", "RGBA")
+                return pil_hi.resize((size, size), Image.Resampling.LANCZOS)
+        except Exception:
+            pass
+
+    hi = max(64, size * 4)
+    emblem_hi = Image.new("RGBA", (hi, hi), (0, 0, 0, 0))
+    _draw_codex_shield_emblem(ImageDraw.Draw(emblem_hi), 0, 0, hi)
+    return emblem_hi.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def _render_wizard_pair(target_dir: Path, scale: float, suffix: str) -> tuple[Path, Path]:
+    w_lg = int(round(164 * scale))
+    h_lg = int(round(314 * scale))
+    large_path = target_dir / f"wizard_large{suffix}.bmp"
+    large = Image.new("RGB", (w_lg, h_lg), (10, 15, 29))
     ld = ImageDraw.Draw(large)
-    for gy in range(28, 314, 28):
-        ld.line([(0, gy), (163, gy)], fill=(19, 30, 54), width=1)
-    for gx in range(28, 164, 28):
-        ld.line([(gx, 0), (gx, 313)], fill=(19, 30, 54), width=1)
-    ld.rectangle([0, 0, 163, 313], outline=(51, 65, 95), width=1)
+    step = max(14, int(round(28 * scale)))
+    for gy in range(step, h_lg, step):
+        ld.line([(0, gy), (w_lg - 1, gy)], fill=(19, 30, 54), width=1)
+    for gx in range(step, w_lg, step):
+        ld.line([(gx, 0), (gx, h_lg - 1)], fill=(19, 30, 54), width=1)
+    ld.rectangle([0, 0, w_lg - 1, h_lg - 1], outline=(51, 65, 95), width=max(1, int(round(scale))))
 
-    emblem_lg = Image.new("RGBA", (88, 88), (10, 15, 29, 255))
-    _draw_codex_shield_emblem(ImageDraw.Draw(emblem_lg), 0, 0, 88)
-    large.paste(emblem_lg.convert("RGB"), (38, 72))
+    logo_lg_sz = int(round(88 * scale))
+    emblem_lg = _render_svg_logo_rgba(logo_lg_sz)
+    large.paste(emblem_lg, (int(round(38 * scale)), int(round(72 * scale))), emblem_lg)
 
-    ld.rectangle([38, 178, 125, 181], fill=(220, 38, 38))
-    ld.rectangle([38, 188, 98, 190], fill=(59, 130, 246))
+    bar_x0 = int(round(38 * scale))
+    ld.rectangle(
+        [bar_x0, int(round(178 * scale)), int(round(125 * scale)), int(round(181 * scale))],
+        fill=(220, 38, 38),
+    )
+    ld.rectangle(
+        [bar_x0, int(round(188 * scale)), int(round(98 * scale)), int(round(190 * scale))],
+        fill=(59, 130, 246),
+    )
     large.save(large_path, format="BMP")
 
-    small = Image.new("RGB", (55, 58), (10, 15, 29))
+    w_sm = int(round(55 * scale))
+    h_sm = int(round(58 * scale))
+    small_path = target_dir / f"wizard_small{suffix}.bmp"
+    small = Image.new("RGB", (w_sm, h_sm), (10, 15, 29))
     sd = ImageDraw.Draw(small)
-    emblem_sm = Image.new("RGBA", (42, 42), (10, 15, 29, 255))
-    _draw_codex_shield_emblem(ImageDraw.Draw(emblem_sm), 0, 0, 42)
-    small.paste(emblem_sm.convert("RGB"), (6, 8))
-    sd.rectangle([0, 0, 54, 57], outline=(59, 130, 246), width=1)
+    logo_sm_sz = int(round(42 * scale))
+    emblem_sm = _render_svg_logo_rgba(logo_sm_sz)
+    small.paste(emblem_sm, (int(round(6 * scale)), int(round(8 * scale))), emblem_sm)
+    sd.rectangle([0, 0, w_sm - 1, h_sm - 1], outline=(59, 130, 246), width=max(1, int(round(scale))))
     small.save(small_path, format="BMP")
 
+    return large_path, small_path
+
+
+def generate_installer_wizard_images(output_dir: Path | None = None) -> tuple[Path, Path]:
+    """Generate anti-aliased HiDPI (100%, 150%, 200%) TRODAI BMP banners for Inno Setup."""
+    target_dir = output_dir if output_dir is not None else (ASSETS / "icons")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    large_path, small_path = _render_wizard_pair(target_dir, 1.0, "")
+    _render_wizard_pair(target_dir, 1.5, "_150")
+    _render_wizard_pair(target_dir, 2.0, "_200")
     return large_path, small_path
 
 
@@ -236,14 +294,19 @@ def build_pyinstaller_args(
     ico_path: Path,
     work_dir: Path,
     dist_dir: Path = DIST,
+    *,
+    bundle_mode: str = "onefile",
+    app_name: str | None = None,
 ) -> list[str]:
-    """Build deterministic PyInstaller CLI argument list for PDF-MD-Lector-Portable.exe (--noconsole/--windowed)."""
+    """Build deterministic PyInstaller CLI argument list (--onefile portable or --onedir installed app)."""
+    mode_flag = "--onedir" if bundle_mode == "onedir" else "--onefile"
+    name = app_name or (APP_BUNDLE_NAME if bundle_mode == "onedir" else PORTABLE_EXE_NAME)
     args = [
-        "--onefile",
+        mode_flag,
         "--noconsole",
         "--windowed",
         "--name",
-        PORTABLE_EXE_NAME,
+        name,
         "--icon",
         str(ico_path),
         "--distpath",
@@ -308,24 +371,30 @@ def write_sha256_manifest(files: list[Path], output_path: Path | None = None) ->
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build PDF/MD Lector Portable, Setup installer, and SHA256SUMS.txt")
     parser.add_argument("--portable-only", action="store_true", help="Skip Inno Setup installer compilation")
+    parser.add_argument("--setup-only", action="store_true", help="Skip rebuilding standalone Portable.exe")
     parser.add_argument("--dry-run", action="store_true", help="Print planned build commands without compiling")
     args = parser.parse_args(argv)
 
     version = read_version()
     ico_path = ensure_app_icon()
 
-    work_dir = BUILD / "pyinstaller_work"
+    work_dir = Path(tempfile.gettempdir()) / f"pdf_lector_pyi_{os.getpid()}"
     entry_script = work_dir / "pyinstaller_entry.py"
 
-    pyi_args = build_pyinstaller_args(entry_script, ico_path, work_dir, dist_dir=DIST)
+    pyi_portable_args = build_pyinstaller_args(entry_script, ico_path, work_dir, dist_dir=DIST, bundle_mode="onefile")
+    pyi_onedir_args = build_pyinstaller_args(
+        entry_script, ico_path, work_dir, dist_dir=DIST, bundle_mode="onedir", app_name=APP_BUNDLE_NAME
+    )
     portable_exe = DIST / f"{PORTABLE_EXE_NAME}.exe"
+    onedir_exe = DIST / APP_BUNDLE_NAME / f"{APP_BUNDLE_NAME}.exe"
     setup_exe = DIST / f"{SETUP_EXE_NAME}.exe"
     iscc = find_iscc()
 
     if args.dry_run:
         print(f"Version: {version}")
         print(f"Icon: {ico_path}")
-        print(f"PyInstaller args: {' '.join(pyi_args)}")
+        print(f"PyInstaller args (portable): {' '.join(pyi_portable_args)}")
+        print(f"PyInstaller args (onedir): {' '.join(pyi_onedir_args)}")
         print(f"Inno Setup compiler: {iscc if iscc is not None else 'NOT FOUND'}")
         return 0
 
@@ -338,11 +407,16 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
 
-    run_pyinstaller(pyi_args)
-    maybe_sign_binary(portable_exe)
+    artifacts: list[Path] = []
+    if not args.setup_only:
+        run_pyinstaller(pyi_portable_args)
+        maybe_sign_binary(portable_exe)
+        if portable_exe.exists():
+            artifacts.append(portable_exe)
 
-    artifacts: list[Path] = [portable_exe]
     if not args.portable_only:
+        run_pyinstaller(pyi_onedir_args)
+        maybe_sign_binary(onedir_exe)
         if iscc is not None:
             iss_file = ROOT / "packaging" / "installer.iss"
             res = subprocess.run(

@@ -121,10 +121,11 @@ Si tomas el relevo tras una interrupcion o limite de cuota:
   - **Bateria completa (`$env:QT_QPA_PLATFORM="offscreen"; uv run --no-sync pytest tests/ -q --tb=short`):** **`515 passed in 2658.27s`** (`exit 0`, `0` fallos, `0` omitidas — incluye unitarias `M1`–`M5`, prototipo base y los `419` casos E2E Tiers 1–4).
   - **Auditoria estatica y arranque Fase 1:** `STATIC_VIOLATIONS: []` (cero emojis Unicode, cero `QtWebEngine`, cero `super().__lt__()`, cero `font-weight: 600`/`DemiBold`), `SVG_VIOLATIONS: []` (100 % poligonales) y `PHASE1_MS=273.56` (`< 300 ms`).
   - **Compilacion real Windows 11 (`uv run --no-sync python scripts/build_exe.py` -> `BUILD_EXIT=0`):**
-    - `dist/PDF-MD-Lector-Portable.exe` (`79,154,507` bytes, SHA-256 `abd0f3eed9de414e47ff8bc50e1b19a14172f0cda2c811efd5c28d4116b31a0e`)
-    - `dist/PDF-MD-Lector-Setup.exe` (`80,313,235` bytes, SHA-256 `582bf0cb2aee6cf352cde6cbf47ad084ec8569aeaef84f12ec1a6794dda3cbf2`)
-    - `dist/SHA256SUMS.txt` (`183` bytes)
-    - Prueba en vivo de arranque empaquetado (`PDF-MD-Lector-Portable.exe`, `PDF_LECTOR_BENCH_STARTUP=1`, `PDF_LECTOR_BENCH_EXIT=1`): `EXE_SMOKE_EXIT=0`.
+    - `dist/PDF-MD-Lector-Portable.exe` (SHA-256 `1df9aa038c2953001375fb45ed384233a80547b8e4a2050126ee32482415347d`, firmado `Valid`)
+    - `dist/PDF-MD-Lector/PDF-MD-Lector.exe` (paquete `--onedir` instalado por Setup: arranque real total **`1,743.93 ms`** / `FIRST_FRAME_MS=63.85 ms` vs `39,746.60 ms` en `--onefile` — 22x mas rapido; firmado `Valid`)
+    - `dist/PDF-MD-Lector-Setup.exe` (SHA-256 `43725e98a4c2dc4130460d1d7f0c9fed1289254cf98b432d79c5f76c066f57c3`, firmado `Valid`, bitmaps HiDPI `100%/150%/200%` renderizados desde `pdf_lector_logo.svg` con antialiasing 4x)
+    - `dist/SHA256SUMS.txt`
+    - Prueba en vivo de arranque empaquetado (`PDF-MD-Lector.exe`, `PDF_LECTOR_BENCH_STARTUP=1`, `PDF_LECTOR_BENCH_EXIT=1`): `EXIT=0`, Splash progresivo `5% -> 100%`.
     - Firma local gratuita dry-run (`scripts/sign_local.ps1 -DryRun`): `SIGN_DRY_EXIT=0` (sin modificar almacenes de certificados).
   - **Revision visual final (`final_screenshots/`):** 10 capturas claro/oscuro (`980x650`, `1200x760`, `1366x720`, Visor mixto `.pdf`/`.md` con Diccionario estilo Kindle cerrado y abierto, y Theme Studio) aprobadas sin recortes ni violaciones de identidad TRODAI.
   - **Git local:** Inicializado en rama `main` con 6 commits semanticos en espanol, `git notes` de trazabilidad y etiqueta anotada `v0.1.0` (sin repositorio remoto ni `git push`).

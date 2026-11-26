@@ -9,7 +9,7 @@
 #define MyAppURL "https://github.com/dairo707-maker/PDF-MD-Lector-by-TRODAI"
 #define MyAppExeName "PDF-MD-Lector.exe"
 #define MyAppUserModelID "TRODAI.PDFMDLector"
-#define SourcePortableExe "..\dist\PDF-MD-Lector-Portable.exe"
+#define SourceAppDir "..\dist\PDF-MD-Lector"
 
 [Setup]
 AppId=TRODAI.PDFMDLector
@@ -29,8 +29,8 @@ DisableProgramGroupPage=no
 DefaultGroupName={#MyAppSafeName} by TRODAI
 LicenseFile=..\LICENSE
 SetupIconFile=..\assets\icons\pdf_lector.ico
-WizardImageFile=..\assets\icons\wizard_large.bmp
-WizardSmallImageFile=..\assets\icons\wizard_small.bmp
+WizardImageFile=..\assets\icons\wizard_large.bmp,..\assets\icons\wizard_large_150.bmp,..\assets\icons\wizard_large_200.bmp
+WizardSmallImageFile=..\assets\icons\wizard_small.bmp,..\assets\icons\wizard_small_150.bmp,..\assets\icons\wizard_small_200.bmp
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} by TRODAI
 ChangesAssociations=yes
@@ -94,7 +94,7 @@ Name: "assocpdf"; Description: "{cm:AssocPdfTask}"; GroupDescription: "{cm:Integ
 Name: "assocmd"; Description: "{cm:AssocMdTask}"; GroupDescription: "{cm:IntegrationGroup}"; Flags: unchecked
 
 [Files]
-Source: "{#SourcePortableExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+Source: "{#SourceAppDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -131,6 +131,7 @@ Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden skipifdoes
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
 Type: filesandordirs; Name: "{app}\docs"
 Type: dirifempty; Name: "{app}"
 

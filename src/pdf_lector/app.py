@@ -279,7 +279,12 @@ def launch_app(argv: list[str] | None = None) -> int:
             accent_override=profile.accent_override,
         )
         splash.show()
-        splash.set_progress(18, t("splash.step.fonts", profile.language))
+        init_msg = {
+            "es": "Iniciando PDF/MD Lector...",
+            "en": "Starting PDF/MD Lector...",
+            "pt": "Iniciando PDF/MD Lector...",
+        }.get(profile.language, "Iniciando PDF/MD Lector...")
+        splash.set_progress(5, init_msg)
 
     first_frame_ms = (time.perf_counter() - t0) * 1000.0
     if os.environ.get("PDF_LECTOR_BENCH_STARTUP") == "1":
@@ -289,45 +294,69 @@ def launch_app(argv: list[str] | None = None) -> int:
             splash.close()
         return 0
 
-    # Phase 2: Register heavy embedded OFL fonts & UI AFTER SplashScreen first frame is already visible.
-    register_embedded_fonts(app)
-    app.setStyleSheet(build_trodai_qss(profile.base_mode, profile.accent_override))
+    state: dict[str, object] = {}
 
-    if splash is not None:
-        splash.set_progress(45, t("splash.step.theme", profile.language))
+    def _step_fonts() -> None:
+        if splash is not None:
+            splash.set_progress(15, t("splash.step.fonts", profile.language))
+        register_embedded_fonts(app)
+        if splash is not None:
+            splash.set_progress(32, t("splash.step.theme", profile.language))
 
-    from .ui.dialog_localizer import DialogLocalizer  # noqa: PLC0415
-    from .ui.main_window import MainWindow  # noqa: PLC0415
+    def _step_theme() -> None:
+        app.setStyleSheet(build_trodai_qss(profile.base_mode, profile.accent_override))
+        if splash is not None:
+            splash.set_progress(48, t("splash.step.theme", profile.language))
 
-    localizer = DialogLocalizer(app, lang=profile.language, mode=profile.base_mode)
-    win = MainWindow(profile, persist_profile=True, crash_guard=crash_guard)
-    win._dialog_localizer = localizer  # type: ignore[attr-defined]
+    def _step_window() -> None:
+        from .ui.dialog_localizer import DialogLocalizer  # noqa: PLC0415
+        from .ui.main_window import MainWindow  # noqa: PLC0415
 
-    if instance_lock is not None:
-        def _on_forwarded_paths(paths: list[Path]) -> None:
-            for p in paths:
-                win.open_document_path(p, switch_to_viewer=True)
-            win.showNormal()
-            win.raise_()
-            win.activateWindow()
+        if splash is not None:
+            splash.set_progress(65, t("splash.step.ui", profile.language))
+        localizer = DialogLocalizer(app, lang=profile.language, mode=profile.base_mode)
+        win = MainWindow(profile, persist_profile=True, crash_guard=crash_guard)
+        win._dialog_localizer = localizer  # type: ignore[attr-defined]
+        state["win"] = win
 
-        instance_lock.start_server(_on_forwarded_paths)
+        if instance_lock is not None:
+            def _on_forwarded_paths(paths: list[Path]) -> None:
+                for p in paths:
+                    win.open_document_path(p, switch_to_viewer=True)
+                win.showNormal()
+                win.raise_()
+                win.activateWindow()
 
-    if crash_guard is not None:
-        crash_guard.install_qt_message_handler()
+            instance_lock.start_server(_on_forwarded_paths)
 
-    if splash is not None:
-        splash.set_progress(75, t("splash.step.ui", profile.language))
+        if crash_guard is not None:
+            crash_guard.install_qt_message_handler()
 
-    if args.doc_path:
-        opened = win.open_document_path(Path(args.doc_path), switch_to_viewer=True)
-        if not opened:
+    def _step_document() -> None:
+        from .ui.main_window import MainWindow  # noqa: PLC0415
+
+        win = state["win"]
+        assert isinstance(win, MainWindow)
+        if splash is not None:
+            splash.set_progress(82, t("splash.step.viewer", profile.language))
+        if args.doc_path:
+            opened = win.open_document_path(Path(args.doc_path), switch_to_viewer=True)
+            if not opened:
+                win.ensure_sample_pdf_loaded()
+        else:
             win.ensure_sample_pdf_loaded()
-    else:
-        win.ensure_sample_pdf_loaded()
+        if splash is not None:
+            splash.set_progress(95, t("splash.step.ready", profile.language))
 
-    if splash is not None:
-        splash.set_progress(92, t("splash.step.viewer", profile.language))
+    def _step_finish() -> None:
+        from .ui.main_window import MainWindow  # noqa: PLC0415
+
+        win = state["win"]
+        assert isinstance(win, MainWindow)
+        if splash is None:
+            win.show()
+        else:
+            splash.finish_and_close(win)
 
     def _on_about_to_quit() -> None:
         if crash_guard is not None:
@@ -338,11 +367,23 @@ def launch_app(argv: list[str] | None = None) -> int:
 
     app.aboutToQuit.connect(_on_about_to_quit)
 
-    if splash is None:
-        win.show()
+    if splash is None or args.fast_boot:
+        _step_fonts()
+        _step_theme()
+        _step_window()
+        _step_document()
+        _step_finish()
     else:
-        delay = 0 if args.fast_boot else 750
-        QTimer.singleShot(delay, lambda: splash.finish_and_close(win))
+        steps = [_step_fonts, _step_theme, _step_window, _step_document, _step_finish]
+
+        def _run_next(idx: int = 0) -> None:
+            if idx >= len(steps):
+                return
+            steps[idx]()
+            if idx + 1 < len(steps):
+                QTimer.singleShot(45, lambda: _run_next(idx + 1))
+
+        QTimer.singleShot(35, lambda: _run_next(0))
 
     return app.exec()
 

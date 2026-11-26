@@ -30,6 +30,7 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $DefaultTargets = @(
+    (Join-Path $RepoRoot "dist\PDF-MD-Lector\PDF-MD-Lector.exe"),
     (Join-Path $RepoRoot "dist\PDF-MD-Lector-Portable.exe"),
     (Join-Path $RepoRoot "dist\PDF-MD-Lector-Setup.exe")
 )
@@ -130,7 +131,7 @@ if ($InstallTrust) {
     }
 }
 
-$targets = Resolve-TargetFiles -InputPath $TargetPath
+$targets = @(Resolve-TargetFiles -InputPath $TargetPath)
 if ($targets.Count -eq 0) {
     Write-Output "No target executables found to sign (build dist\PDF-MD-Lector-Portable.exe first)."
     exit 0
