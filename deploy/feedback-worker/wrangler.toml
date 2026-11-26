@@ -1,0 +1,12 @@
+# Cloudflare Worker configuration for PDF/MD Lector anonymous support reports.
+# Before deploying, set your GitHub maintainer token as an encrypted Cloudflare secret:
+#   npx wrangler secret put GITHUB_TOKEN
+# NEVER commit any real token or secret in this file.
+
+name = "pdf-md-lector-feedback-worker"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+GITHUB_REPO = "dairo707-maker/PDF-MD-Lector-by-TRODAI"
+ALLOWED_ORIGIN = "*"

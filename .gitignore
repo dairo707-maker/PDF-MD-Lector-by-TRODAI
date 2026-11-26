@@ -1,0 +1,42 @@
+# Python / uv environments
+.venv/
+venv/
+ENV/
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Build & packaging outputs
+build/
+dist/
+*.spec
+scripts/pyinstaller_entry.py
+
+# Local runtime logs, reports & secrets (never commit user credentials or keys)
+*.log
+*.tmp
+*.bak
+secrets.json
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+.env
+.env.*
+
+# IDE / OS artifacts
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+screenshots/

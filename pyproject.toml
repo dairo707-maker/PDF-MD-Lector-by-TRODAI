@@ -1,0 +1,51 @@
+[project]
+name = "pdf-lector-by-trodai"
+version = "0.1.0"
+description = "PDF/MD Lector by TRODAI — Fast, privacy-first modular PDF and Markdown reader, editor, and tools suite for Windows 11."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Dairo Trocha (TRODAI)" }]
+dependencies = [
+    "PySide6>=6.7",
+    "pypdfium2>=4.30",
+    "Pillow>=10.4",
+    "reportlab>=4.2",
+    "pikepdf>=9.0",
+    "pypdf>=5.0",
+    "pyHanko>=0.25",
+    "pdfplumber>=0.11",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "markdown-it-py>=3.0",
+    "nh3>=0.2",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "qrcode>=8.0",
+    "cryptography>=43.0",
+    "winrt-Windows.Media.Ocr>=2.1",
+    "winrt-Windows.Graphics.Imaging>=2.1",
+    "winrt-Windows.Storage.Streams>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pyinstaller>=6.10.0",
+]
+
+[project.scripts]
+pdf-md-lector = "pdf_lector.app:main"
+pdf-lector = "pdf_lector.app:main"
+pdf-md-lector-mcp = "pdf_lector.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pdf_lector"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
