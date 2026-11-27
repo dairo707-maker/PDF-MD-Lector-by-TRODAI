@@ -3,6 +3,19 @@
 All notable changes to **PDF/MD Lector by TRODAI** are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-11-26
+
+### Fixed
+- **Zero Ghost/Baked Sticky Notes on Hide & Move (`core/pdf_engine.py`, `ui/viewer_view.py`):** Added `draw_annots` parameter + cache dimension to `PdfDocumentSession.render_page` / `get_cached_page` / `AsyncPageRenderTask` and set `draw_annots=False` inside `PdfTabPage` viewport rendering (`draw_annots=True` preserved for external preview/print/thumbnails). Saved sticky notes and highlights are now rendered solely by `PdfCanvas` inside the app, eliminating fixed residual ghost boxes when hiding notes (`Ctrl+Shift+N` / Eye toggle) or moving existing notes.
+
+### Changed
+- **Inline Sticky Note Editing + Red Trash Button (`ui/pdf_canvas.py`, `ui/notes_panel.py`):** Clicking a sticky note now opens its live editor directly on top of the note's visual frame (sized cleanly to the note instead of spawning a detached side card), featuring a solid red `#DC2626` trash-can icon delete button (`StickyDelBtn` & `NoteCardDelBtn`) with confirmation.
+- **Icon-Only Ribbons Audit (`ui/pdf_canvas.py`, `ui/viewer_view.py`, `ui/md_tab_page.py`, `ui/presentation_view.py`):** Converted remaining text-labeled ribbon/toolbar controls—selection popover highlight button, PDF/Markdown bookmark add & red-trash delete buttons, Markdown formatting & save ribbon actions, and Presentation HUD Blackout/Exit controls—to uniform icon-only buttons with descriptive tooltips.
+
+### Added
+- **Pointer-Reactive Motion on TopBar & Sidebar (`theme/motion_engine.py`, `theme/palette.py`, `ui/main_window.py`):** Upgraded `TopBar` and `Sidebar` (including the collapsed slim ribbon) to `MotionBackdropWidget(..., chrome_surface=True)` with aspect-calibrated polygonal mesh facets reactive to pointer movement alongside the Hub Hero, while keeping the Viewer document backdrop quiet for distraction-free reading.
+- **Unsaved Changes Confirmation on Window & Tab Close (`ui/main_window.py`, `ui/viewer_view.py`):** Closing the app (`MainWindow.closeEvent`) or closing an edited tab (`ViewerView._close_tab`) now detects pending PDF/Markdown changes and prompts the user to Save, Discard, or Cancel before closing.
+
 ## [0.4.1] - 2026-11-26
 
 ### Added

@@ -283,7 +283,7 @@ def test_m4_cli_version_and_phase1_bench_under_300ms() -> None:
         timeout=15,
         check=True,
     )
-    assert "0.4.1" in ver.stdout
+    assert "0.4.2" in ver.stdout
 
     env["PDF_LECTOR_BENCH_STARTUP"] = "1"
     env["PDF_LECTOR_BENCH_EXIT"] = "1"

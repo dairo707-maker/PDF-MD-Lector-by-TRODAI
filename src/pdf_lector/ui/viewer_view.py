@@ -300,18 +300,28 @@ class PdfTabPage(QWidget):
         self.bm_hdr_lbl.setFont(th_f)
         toc_layout.addWidget(self.bm_hdr_lbl)
 
-        bm_actions = FlowLayout(h_spacing=6, v_spacing=4)
+        bm_actions = QHBoxLayout()
+        bm_actions.setContentsMargins(0, 0, 0, 0)
+        bm_actions.setSpacing(6)
         self.bm_add_btn = AdaptiveButton("", self.toc_pane, role="GhostAction")
-        self.bm_add_btn.setMinimumHeight(26)
-        self.bm_add_btn.setStyleSheet("padding: 4px 10px; font-size: 11px;")
+        self.bm_add_btn.setProperty("iconOnly", "true")
+        self.bm_add_btn.setFixedSize(28, 28)
+        self.bm_add_btn.setIconSize(QSize(15, 15))
         self.bm_add_btn.clicked.connect(self._prompt_add_bookmark)
-        bm_actions.addWidget(self.bm_add_btn)
+        bm_actions.addWidget(self.bm_add_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.bm_del_btn = AdaptiveButton("", self.toc_pane, role="GhostAction")
-        self.bm_del_btn.setMinimumHeight(26)
-        self.bm_del_btn.setStyleSheet("padding: 4px 10px; font-size: 11px;")
+        self.bm_del_btn = AdaptiveButton("", self.toc_pane, role="RiskAction")
+        self.bm_del_btn.setObjectName("BookmarkDelBtn")
+        self.bm_del_btn.setProperty("iconOnly", "true")
+        self.bm_del_btn.setFixedSize(28, 28)
+        self.bm_del_btn.setIconSize(QSize(14, 14))
+        self.bm_del_btn.setStyleSheet(
+            "QPushButton#BookmarkDelBtn { background-color: #DC2626; border: 1px solid #B91C1C; padding: 0px; } "
+            "QPushButton#BookmarkDelBtn:hover { background-color: #B91C1C; border: 1px solid #991B1B; }"
+        )
         self.bm_del_btn.clicked.connect(self._remove_selected_bookmark)
-        bm_actions.addWidget(self.bm_del_btn)
+        bm_actions.addWidget(self.bm_del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        bm_actions.addStretch(1)
         toc_layout.addLayout(bm_actions)
 
         self.bm_list = QListWidget(self.toc_pane)
@@ -1109,7 +1119,12 @@ class PdfTabPage(QWidget):
         for idx in self._visible_page_indices():
             if self._rendered_signatures.get(idx) == sig:
                 continue
-            cached = self.session.get_cached_page(idx, scale=self.zoom, rotation=self.rotation)
+            cached = self.session.get_cached_page(
+                idx,
+                scale=self.zoom,
+                rotation=self.rotation,
+                draw_annots=False,
+            )
             if cached is not None:
                 self._apply_page_image(idx, cached)
                 continue
@@ -1121,6 +1136,7 @@ class PdfTabPage(QWidget):
                 idx,
                 self.zoom,
                 self.rotation,
+                draw_annots=False,
             )
             self._active_tasks[idx] = task
             task.signals.rendered.connect(self._on_async_rendered, Qt.ConnectionType.QueuedConnection)
@@ -1174,8 +1190,10 @@ class PdfTabPage(QWidget):
         self.thumb_close_btn.setToolTip(_tv("viewer.rail.close", lang))
         self.toc_empty_lbl.setText(t("viewer.toc_empty", lang))
         self.bm_hdr_lbl.setText(t("viewer.bookmarks_header", lang))
-        self.bm_add_btn.setText(t("viewer.bookmark_add", lang))
-        self.bm_del_btn.setText(t("viewer.bookmark_del", lang))
+        self.bm_add_btn.setText("")
+        self.bm_add_btn.setToolTip(t("viewer.bookmark_add", lang))
+        self.bm_del_btn.setText("")
+        self.bm_del_btn.setToolTip(t("viewer.bookmark_del", lang))
         self._sync_detach_icons()
         if self._floating_thumb_win is not None and shiboken6.isValid(self._floating_thumb_win):
             self._floating_thumb_win.setWindowTitle(_tv("viewer.rail.thumbs_title", lang))
@@ -1209,6 +1227,8 @@ class PdfTabPage(QWidget):
         self.backdrop.set_profile(profile)
         self.toc_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
         self.thumb_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
+        self.bm_add_btn.setIcon(load_svg_icon("bookmark_add", color=p["icon_color"], size=15))
+        self.bm_del_btn.setIcon(load_svg_icon("trash", color="#FFFFFF", size=14))
         for mid, icon_name in self._tool_icon_map.items():
             if mid in self._tool_btns:
                 self._tool_btns[mid].setIcon(load_svg_icon(icon_name, color=p["icon_color"], size=16))
@@ -1789,6 +1809,19 @@ class ViewerView(QWidget):
     def current_tab(self) -> ActiveViewerTab | None:
         return self._current_tab()
 
+    def unsaved_document_names(self) -> list[str]:
+        """Return display names of all open tabs that currently have unsaved edits."""
+        dirty: list[str] = []
+        for idx in range(self.tabs.count()):
+            w = self.tabs.widget(idx)
+            if isinstance(w, (PdfTabPage, MarkdownTabPage)) and w.has_unsaved_changes():
+                name = str(
+                    w.property("base_tab_title")
+                    or (w.pdf_path.name if isinstance(w, PdfTabPage) else w.md_path.name)
+                )
+                dirty.append(name)
+        return dirty
+
     def has_unsaved_changes(self) -> bool:
         for idx in range(self.tabs.count()):
             w = self.tabs.widget(idx)
@@ -1806,6 +1839,42 @@ class ViewerView(QWidget):
 
     def _close_tab(self, index: int) -> None:
         w = self.tabs.widget(index)
+        if isinstance(w, (PdfTabPage, MarkdownTabPage)) and w.has_unsaved_changes():
+            doc_name = str(
+                w.property("base_tab_title")
+                or (w.pdf_path.name if isinstance(w, PdfTabPage) else w.md_path.name)
+            )
+            prompt_fn = getattr(self, "_unsaved_tab_close_prompt_fn", None)
+            if prompt_fn is not None:
+                decision = str(prompt_fn(doc_name)).strip().lower()
+            elif QApplication.platformName() != "offscreen":
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle("Cambios sin guardar")
+                box.setText(f"El documento '{doc_name}' tiene cambios sin guardar.")
+                box.setInformativeText("Deseas guardar los cambios antes de cerrar esta pestana?")
+                btn_save = box.addButton("Guardar", QMessageBox.ButtonRole.AcceptRole)
+                btn_discard = box.addButton("No guardar", QMessageBox.ButtonRole.DestructiveRole)
+                box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+                box.setDefaultButton(btn_save)
+                box.exec()
+                clicked = box.clickedButton()
+                if clicked is btn_save:
+                    decision = "save"
+                elif clicked is btn_discard:
+                    decision = "discard"
+                else:
+                    decision = "cancel"
+            else:
+                decision = "discard"
+
+            if decision == "cancel":
+                return
+            if decision == "save":
+                if not bool(w.save_document()):
+                    return
+                self._on_tab_state_changed()
+
         self.tabs.removeTab(index)
         if isinstance(w, (PdfTabPage, MarkdownTabPage)):
             w.cleanup()

@@ -273,18 +273,28 @@ class MarkdownTabPage(QWidget):
         self.bm_hdr_lbl.setFont(th_f)
         toc_layout.addWidget(self.bm_hdr_lbl)
 
-        bm_actions = FlowLayout(h_spacing=6, v_spacing=4)
+        bm_actions = QHBoxLayout()
+        bm_actions.setContentsMargins(0, 0, 0, 0)
+        bm_actions.setSpacing(6)
         self.bm_add_btn = AdaptiveButton("", self.toc_pane, role="GhostAction")
-        self.bm_add_btn.setMinimumHeight(26)
-        self.bm_add_btn.setStyleSheet("padding: 4px 10px; font-size: 11px;")
+        self.bm_add_btn.setProperty("iconOnly", "true")
+        self.bm_add_btn.setFixedSize(28, 28)
+        self.bm_add_btn.setIconSize(QSize(15, 15))
         self.bm_add_btn.clicked.connect(self._prompt_add_bookmark)
-        bm_actions.addWidget(self.bm_add_btn)
+        bm_actions.addWidget(self.bm_add_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.bm_del_btn = AdaptiveButton("", self.toc_pane, role="GhostAction")
-        self.bm_del_btn.setMinimumHeight(26)
-        self.bm_del_btn.setStyleSheet("padding: 4px 10px; font-size: 11px;")
+        self.bm_del_btn = AdaptiveButton("", self.toc_pane, role="RiskAction")
+        self.bm_del_btn.setObjectName("BookmarkDelBtn")
+        self.bm_del_btn.setProperty("iconOnly", "true")
+        self.bm_del_btn.setFixedSize(28, 28)
+        self.bm_del_btn.setIconSize(QSize(14, 14))
+        self.bm_del_btn.setStyleSheet(
+            "QPushButton#BookmarkDelBtn { background-color: #DC2626; border: 1px solid #B91C1C; padding: 0px; } "
+            "QPushButton#BookmarkDelBtn:hover { background-color: #B91C1C; border: 1px solid #991B1B; }"
+        )
         self.bm_del_btn.clicked.connect(self._remove_selected_bookmark)
-        bm_actions.addWidget(self.bm_del_btn)
+        bm_actions.addWidget(self.bm_del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        bm_actions.addStretch(1)
         toc_layout.addLayout(bm_actions)
 
         self.bm_list = QListWidget(self.toc_pane)
@@ -349,28 +359,39 @@ class MarkdownTabPage(QWidget):
         fmt_flow = FlowLayout(self.format_toolbar, margin=0, h_spacing=4, v_spacing=4)
 
         self._fmt_btns: dict[str, AdaptiveButton] = {}
+        self._fmt_icon_map: dict[str, str] = {
+            "list": "toc",
+            "table": "thumbs",
+            "link": "detach",
+            "save": "check",
+            "save_as": "export",
+        }
         fmt_specs = [
             ("h1", "H1", lambda: self.insert_markdown_snippet("# ")),
             ("h2", "H2", lambda: self.insert_markdown_snippet("## ")),
             ("h3", "H3", lambda: self.insert_markdown_snippet("### ")),
-            ("bold", _tm("md.fmt.bold", self._lang), lambda: self._wrap_selection("**", "**", "texto")),
-            ("italic", _tm("md.fmt.italic", self._lang), lambda: self._wrap_selection("*", "*", "texto")),
-            ("code", _tm("md.fmt.code", self._lang), lambda: self.insert_markdown_snippet("\n```python\n\n```\n")),
-            ("list", _tm("md.fmt.list", self._lang), lambda: self.insert_markdown_snippet("\n- ")),
+            ("bold", "B", lambda: self._wrap_selection("**", "**", "texto")),
+            ("italic", "I", lambda: self._wrap_selection("*", "*", "texto")),
+            ("code", "</>", lambda: self.insert_markdown_snippet("\n```python\n\n```\n")),
+            ("list", "", lambda: self.insert_markdown_snippet("\n- ")),
             (
                 "table",
-                _tm("md.fmt.table", self._lang),
+                "",
                 lambda: self.insert_markdown_snippet("\n| Col 1 | Col 2 |\n| --- | --- |\n| A | B |\n"),
             ),
-            ("link", _tm("md.fmt.link", self._lang), lambda: self.insert_markdown_snippet("[titulo](./ruta.md)")),
-            ("save", _tm("md.save", self._lang), self.save_document),
-            ("save_as", _tm("md.save_as", self._lang), lambda: self.save_document_as(None)),
+            ("link", "", lambda: self.insert_markdown_snippet("[titulo](./ruta.md)")),
+            ("save", "", self.save_document),
+            ("save_as", "", lambda: self.save_document_as(None)),
         ]
-        for key, label, slot in fmt_specs:
+        for key, symbol, slot in fmt_specs:
             role = "PrimaryAction" if key == "save" else "GhostAction"
-            btn = AdaptiveButton(label, self.format_toolbar, role=role)
-            btn.setMinimumHeight(26)
-            btn.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+            btn = AdaptiveButton(symbol, self.format_toolbar, role=role)
+            btn.setFixedSize(28, 28)
+            btn.setIconSize(QSize(15, 15))
+            if key in self._fmt_icon_map:
+                btn.setProperty("iconOnly", "true")
+            else:
+                btn.setStyleSheet("padding: 0px; font-size: 11px; font-weight: 700;")
             btn.clicked.connect(slot)
             fmt_flow.addWidget(btn)
             self._fmt_btns[key] = btn
@@ -703,10 +724,15 @@ class MarkdownTabPage(QWidget):
         self.toc_hdr_lbl.setText(_tm("md.toc_header", self._lang))
         self.toc_empty_lbl.setText(_tm("md.toc_empty", self._lang))
         self.bm_hdr_lbl.setText(t("viewer.bookmarks_header", self._lang))
-        self.bm_add_btn.setText(t("viewer.bookmark_add", self._lang))
-        self.bm_del_btn.setText(t("viewer.bookmark_del", self._lang))
+        self.bm_add_btn.setText("")
+        self.bm_add_btn.setToolTip(t("viewer.bookmark_add", self._lang))
+        self.bm_del_btn.setText("")
+        self.bm_del_btn.setToolTip(t("viewer.bookmark_del", self._lang))
 
         label_map = {
+            "h1": "H1",
+            "h2": "H2",
+            "h3": "H3",
             "bold": "md.fmt.bold",
             "italic": "md.fmt.italic",
             "code": "md.fmt.code",
@@ -718,7 +744,10 @@ class MarkdownTabPage(QWidget):
         }
         for key, i18n_key in label_map.items():
             if key in self._fmt_btns:
-                self._fmt_btns[key].setText(_tm(i18n_key, self._lang))
+                tip = i18n_key if i18n_key.startswith("H") else _tm(i18n_key, self._lang)
+                self._fmt_btns[key].setToolTip(tip)
+                if key in self._fmt_icon_map:
+                    self._fmt_btns[key].setText("")
         self._sync_blocked_badge()
 
     def apply_profile(self, profile: ThemeProfile) -> None:
@@ -731,10 +760,12 @@ class MarkdownTabPage(QWidget):
         self.view_mode_switch.apply_theme(self._mode)
         self.view_mode_switch.set_animations_enabled(profile.motion_level != "static")
         self.blocked_tag.apply_theme(self._mode)
-        if "save" in self._fmt_btns:
-            self._fmt_btns["save"].setIcon(load_svg_icon("check", color=p["primary_fg"], size=13))
-        if "save_as" in self._fmt_btns:
-            self._fmt_btns["save_as"].setIcon(load_svg_icon("export", color=p["icon_color"], size=13))
+        self.bm_add_btn.setIcon(load_svg_icon("bookmark_add", color=p["icon_color"], size=15))
+        self.bm_del_btn.setIcon(load_svg_icon("trash", color="#FFFFFF", size=14))
+        for key, icon_name in self._fmt_icon_map.items():
+            if key in self._fmt_btns:
+                col = p["primary_fg"] if key == "save" else p["icon_color"]
+                self._fmt_btns[key].setIcon(load_svg_icon(icon_name, color=col, size=14))
         self._render_preview()
 
     def cleanup(self) -> None:

@@ -89,6 +89,8 @@ class AsyncPageRenderTask(QRunnable):
         page_index: int,
         scale: float,
         rotation: int,
+        *,
+        draw_annots: bool = True,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
@@ -97,11 +99,17 @@ class AsyncPageRenderTask(QRunnable):
         self.page_index = page_index
         self.scale = scale
         self.rotation = rotation
+        self.draw_annots = bool(draw_annots)
         self.signals = RenderSignals()
 
     def run(self) -> None:
         try:
-            img = self.session.render_page(self.page_index, scale=self.scale, rotation=self.rotation)
+            img = self.session.render_page(
+                self.page_index,
+                scale=self.scale,
+                rotation=self.rotation,
+                draw_annots=self.draw_annots,
+            )
             self.signals.rendered.emit(self.doc_id, self.page_index, self.scale, self.rotation, img)
         except Exception as exc:
             self.signals.failed.emit(self.doc_id, self.page_index, str(exc))
@@ -130,7 +138,7 @@ class PdfDocumentSession:
             self._doc = pdfium.PdfDocument(str(self.pdf_path))
         self._max_entries = max(1, int(max_cache_entries))
         self._max_bytes = max(1024 * 1024, int(max_cache_bytes))
-        self._cache: OrderedDict[tuple[int, int, int], QImage] = OrderedDict()
+        self._cache: OrderedDict[tuple[int, int, int, int], QImage] = OrderedDict()
         self._cache_bytes = 0
         self._closed = False
 
@@ -151,27 +159,48 @@ class PdfDocumentSession:
         with self._lock:
             return self._cache_bytes
 
-    def _cache_key(self, page_index: int, scale: float, rotation: int) -> tuple[int, int, int]:
-        return (int(page_index), int(round(scale * 1000)), int(rotation % 360))
+    def _cache_key(
+        self,
+        page_index: int,
+        scale: float,
+        rotation: int,
+        draw_annots: bool = True,
+    ) -> tuple[int, int, int, int]:
+        return (int(page_index), int(round(scale * 1000)), int(rotation % 360), 1 if draw_annots else 0)
 
     def _evict_if_needed(self) -> None:
         while self._cache and (len(self._cache) > self._max_entries or self._cache_bytes > self._max_bytes):
             _, oldest = self._cache.popitem(last=False)
             self._cache_bytes = max(0, self._cache_bytes - oldest.sizeInBytes())
 
-    def get_cached_page(self, page_index: int, *, scale: float = 1.0, rotation: int = 0) -> QImage | None:
-        key = self._cache_key(page_index, scale, rotation)
+    def get_cached_page(
+        self,
+        page_index: int,
+        *,
+        scale: float = 1.0,
+        rotation: int = 0,
+        draw_annots: bool = True,
+    ) -> QImage | None:
+        key = self._cache_key(page_index, scale, rotation, draw_annots=draw_annots)
         with self._lock:
             img = self._cache.get(key)
             if img is not None:
                 self._cache.move_to_end(key)
             return img
 
-    def render_page(self, page_index: int, *, scale: float = 1.0, rotation: int = 0) -> QImage:
+    def render_page(
+        self,
+        page_index: int,
+        *,
+        scale: float = 1.0,
+        rotation: int = 0,
+        draw_annots: bool = True,
+    ) -> QImage:
         """Render a PDF page to an owned QImage and store in the bounded LRU cache."""
         safe_scale = max(0.10, min(12.0, float(scale)))
         safe_rot = int(rotation) % 360
-        key = self._cache_key(page_index, safe_scale, safe_rot)
+        want_annots = bool(draw_annots)
+        key = self._cache_key(page_index, safe_scale, safe_rot, draw_annots=want_annots)
 
         with self._lock:
             if self._closed:
@@ -189,7 +218,7 @@ class PdfDocumentSession:
             try:
                 pw, ph = page.get_size()
                 raster_scale = min(safe_scale, 4096.0 / max(1.0, float(pw), float(ph)))
-                bitmap = page.render(scale=raster_scale, rotation=safe_rot)
+                bitmap = page.render(scale=raster_scale, rotation=safe_rot, draw_annots=want_annots)
                 pil_img = bitmap.to_pil().convert("RGBA")
                 raw = pil_img.tobytes("raw", "RGBA")
                 qimg = QImage(raw, pil_img.width, pil_img.height, pil_img.width * 4, QImage.Format.Format_RGBA8888).copy()

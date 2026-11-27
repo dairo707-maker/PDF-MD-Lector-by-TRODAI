@@ -300,20 +300,34 @@ class NotesPanel(QFrame):
             body_lbl.setProperty("tone", "secondary")
             cl.addWidget(body_lbl)
 
-            actions = FlowLayout(h_spacing=4, v_spacing=4)
-            jump_btn = AdaptiveButton(_tn("open_card", self._lang), card, role="GhostAction")
-            jump_btn.setMinimumHeight(24)
-            jump_btn.setStyleSheet("padding: 2px 6px; font-size: 10px;")
+            actions = QHBoxLayout()
+            actions.setContentsMargins(0, 0, 0, 0)
+            actions.setSpacing(6)
+            actions.addStretch(1)
+
+            jump_btn = QPushButton("", card)
+            jump_btn.setProperty("role", "GhostAction")
+            jump_btn.setProperty("iconOnly", "true")
+            jump_btn.setFixedSize(26, 26)
+            jump_btn.setIcon(load_svg_icon("edit", color=p["icon_color"], size=14))
+            jump_btn.setToolTip(_tn("open_card", self._lang))
             jump_btn.clicked.connect(
                 lambda _=False, pi=rec.page_index, nid=rec.id: self.jump_to_note_requested.emit(pi, nid)
             )
-            actions.addWidget(jump_btn)
+            actions.addWidget(jump_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-            del_btn = AdaptiveButton(_tn("delete", self._lang), card, role="RiskAction")
-            del_btn.setMinimumHeight(24)
-            del_btn.setStyleSheet("padding: 2px 6px; font-size: 10px;")
+            del_btn = QPushButton("", card)
+            del_btn.setObjectName("NoteCardDelBtn")
+            del_btn.setProperty("iconOnly", "true")
+            del_btn.setFixedSize(26, 26)
+            del_btn.setIcon(load_svg_icon("trash", color="#FFFFFF", size=14))
+            del_btn.setStyleSheet(
+                "QPushButton#NoteCardDelBtn { background-color: #DC2626; border: 1px solid #B91C1C; padding: 0px; } "
+                "QPushButton#NoteCardDelBtn:hover { background-color: #B91C1C; border: 1px solid #991B1B; }"
+            )
+            del_btn.setToolTip(_tn("delete", self._lang))
             del_btn.clicked.connect(lambda _=False, nid=rec.id: self._confirm_and_delete(nid))
-            actions.addWidget(del_btn)
+            actions.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
             cl.addLayout(actions)
 
             self._cards_layout.addWidget(card)

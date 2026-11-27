@@ -1,6 +1,6 @@
 [project]
 name = "pdf-lector-by-trodai"
-version = "0.4.1"
+version = "0.4.2"
 description = "PDF/MD Lector by TRODAI — Fast, privacy-first modular PDF and Markdown reader, editor, and tools suite for Windows 11."
 readme = "README.md"
 requires-python = ">=3.12"

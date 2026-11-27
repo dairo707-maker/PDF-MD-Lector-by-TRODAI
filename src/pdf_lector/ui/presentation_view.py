@@ -52,6 +52,7 @@ class PresentationWindow(QWidget):
         hud_lay.setSpacing(6)
 
         self.prev_btn = QPushButton("", self.hud)
+        self.prev_btn.setProperty("iconOnly", "true")
         self.prev_btn.setFixedSize(32, 30)
         self.prev_btn.setToolTip("Diapositiva anterior (PgUp / Flecha izq.)")
         self.prev_btn.setIcon(load_svg_icon("prev", color="#F8FAFC", size=16))
@@ -63,20 +64,26 @@ class PresentationWindow(QWidget):
         hud_lay.addWidget(self.page_lbl)
 
         self.next_btn = QPushButton("", self.hud)
+        self.next_btn.setProperty("iconOnly", "true")
         self.next_btn.setFixedSize(32, 30)
         self.next_btn.setToolTip("Siguiente diapositiva (PgDn / Espacio / Clic)")
         self.next_btn.setIcon(load_svg_icon("next", color="#F8FAFC", size=16))
         self.next_btn.clicked.connect(lambda: self.step_slide(1))
         hud_lay.addWidget(self.next_btn)
 
-        self.blank_btn = QPushButton("Negro (B)", self.hud)
+        self.blank_btn = QPushButton("", self.hud)
+        self.blank_btn.setProperty("iconOnly", "true")
+        self.blank_btn.setFixedSize(32, 30)
         self.blank_btn.setToolTip("Alternar pantalla en negro (B / .)")
+        self.blank_btn.setIcon(load_svg_icon("moon", color="#F8FAFC", size=15))
         self.blank_btn.clicked.connect(lambda: self.toggle_blank("black"))
         hud_lay.addWidget(self.blank_btn)
 
-        self.exit_btn = QPushButton("Salir (Esc)", self.hud)
+        self.exit_btn = QPushButton("", self.hud)
+        self.exit_btn.setProperty("iconOnly", "true")
+        self.exit_btn.setFixedSize(32, 30)
         self.exit_btn.setToolTip("Salir del modo presentacion (Esc)")
-        self.exit_btn.setIcon(load_svg_icon("close", color="#FCA5A5", size=14))
+        self.exit_btn.setIcon(load_svg_icon("close", color="#FCA5A5", size=15))
         self.exit_btn.clicked.connect(self.exit_presentation)
         hud_lay.addWidget(self.exit_btn)
 

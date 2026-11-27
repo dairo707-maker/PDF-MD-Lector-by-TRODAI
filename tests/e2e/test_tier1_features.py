@@ -86,8 +86,8 @@ def test_fa01_t1_01_official_branding_and_pyproject() -> None:
     assert pkg.APP_NAME == "PDF/MD Lector"
     assert pkg.COMPANY_NAME == "TRODAI"
     assert pkg.APP_USER_MODEL_ID == "TRODAI.PDFMDLector"
-    assert pkg.read_version() == "0.4.1"
-    assert (WORKSPACE_ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.4.1"
+    assert pkg.read_version() == "0.4.2"
+    assert (WORKSPACE_ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.4.2"
 
     pyproj = tomllib.loads((WORKSPACE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     scripts = pyproj["project"]["scripts"]
@@ -2054,7 +2054,7 @@ def test_fa19_t1_05_about_updater_dialog_displays_version_and_offline_toggle(qap
         dlg.show()
         qapp.processEvents()
         assert dlg.isVisible()
-        assert "0.4.1" in dlg.version_label.text()
+        assert "0.4.2" in dlg.version_label.text()
         assert dlg.offline_only_checkbox is not None
     finally:
         dlg.close()

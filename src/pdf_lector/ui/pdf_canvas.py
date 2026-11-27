@@ -1049,10 +1049,13 @@ class PdfCanvas(QWidget):
         self._hide_popover()
 
         p = get_palette(self._mode)
+        sr = self._pdf_to_screen_rect(rec.rect_pdf)
         card_color = sanitize_color_hex(rec.color_hex)
         card = QFrame(self)
         card.setObjectName("StickyNoteCard")
-        card.setFixedWidth(258)
+        card_w = max(188, int(round(sr.width())))
+        card_h = max(124, int(round(sr.height())))
+        card.setFixedSize(card_w, card_h)
         card_bg = "#0F172A" if self._mode == "dark" else "#FFFFFF"
         editor_bg = "#111C2E" if self._mode == "dark" else "#F8FAFC"
         fg_col = "#F8FAFC" if self._mode == "dark" else "#0F172A"
@@ -1064,15 +1067,15 @@ class PdfCanvas(QWidget):
         )
 
         root = QVBoxLayout(card)
-        root.setContentsMargins(10, 8, 10, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(6, 5, 6, 5)
+        root.setSpacing(4)
 
-        # Header row: Title/Category + Delete + Close
+        # Header row: Category + Red Trash + Close
         hdr = QHBoxLayout()
         hdr.setSpacing(4)
         cat_combo = QComboBox(card)
         cat_combo.setStyleSheet(
-            f"QComboBox {{ background-color: {editor_bg}; color: {fg_col}; border: 1px solid {bd_col}; padding: 3px 6px; }}"
+            f"QComboBox {{ background-color: {editor_bg}; color: {fg_col}; border: 1px solid {bd_col}; padding: 2px 6px; }}"
         )
         for cat in NOTE_CATEGORIES:
             cat_combo.addItem(cat, cat)
@@ -1091,9 +1094,13 @@ class PdfCanvas(QWidget):
 
         del_btn = QPushButton("", card)
         del_btn.setObjectName("StickyDelBtn")
-        del_btn.setProperty("role", "RiskAction")
+        del_btn.setProperty("iconOnly", "true")
         del_btn.setFixedSize(24, 24)
-        del_btn.setIcon(load_svg_icon("trash", color=p["icon_color"], size=13))
+        del_btn.setIcon(load_svg_icon("trash", color="#FFFFFF", size=13))
+        del_btn.setStyleSheet(
+            "QPushButton#StickyDelBtn { background-color: #DC2626; border: 1px solid #B91C1C; padding: 0px; } "
+            "QPushButton#StickyDelBtn:hover { background-color: #B91C1C; border: 1px solid #991B1B; }"
+        )
         del_btn.setToolTip(_tc("note.delete", self._lang))
 
         def _on_delete() -> None:
@@ -1115,6 +1122,7 @@ class PdfCanvas(QWidget):
         close_btn = QPushButton("", card)
         close_btn.setObjectName("StickyCloseBtn")
         close_btn.setProperty("role", "GhostAction")
+        close_btn.setProperty("iconOnly", "true")
         close_btn.setFixedSize(24, 24)
         close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=13))
         close_btn.setToolTip(_tc("note.close", self._lang))
@@ -1124,10 +1132,11 @@ class PdfCanvas(QWidget):
 
         # Color swatches strip
         swatch_row = QHBoxLayout()
-        swatch_row.setSpacing(5)
+        swatch_row.setContentsMargins(0, 0, 0, 0)
+        swatch_row.setSpacing(4)
         for hex_col in CLASSIC_HIGHLIGHT_PALETTE:
             sw = QPushButton("", card)
-            sw.setFixedSize(16, 16)
+            sw.setFixedSize(14, 14)
             sw.setStyleSheet(f"background-color: {hex_col}; border: 1px solid {p['border_strong']}; padding: 0px;")
 
             def _pick_color(_checked: bool = False, c_val: str = hex_col, nid: str = rec.id, c_frame: QFrame = card) -> None:
@@ -1139,24 +1148,24 @@ class PdfCanvas(QWidget):
                     )
 
             sw.clicked.connect(_pick_color)
-            swatch_row.addWidget(sw)
+            swatch_row.addWidget(sw, 0, Qt.AlignmentFlag.AlignVCenter)
         swatch_row.addStretch(1)
         root.addLayout(swatch_row)
 
-        # Live editable content (explicit dark/light foreground so text is always crisp)
+        # Live inline editable content directly inside the note visual
         editor = QTextEdit(card)
         editor.setObjectName("StickyNoteEditor")
-        editor.setFixedHeight(92)
+        editor.setMinimumHeight(44)
         editor.setStyleSheet(
             f"QTextEdit#StickyNoteEditor {{ background-color: {editor_bg}; color: {fg_col}; "
-            f"border: 1px solid {bd_col}; padding: 6px; }}"
+            f"border: 1px solid {bd_col}; padding: 4px; }}"
         )
         editor.setPlaceholderText(_tc("note.placeholder", self._lang))
         editor.setPlainText(rec.content or "")
         editor.textChanged.connect(
             lambda nid=rec.id, ed=editor: self.update_sticky_note(nid, content=ed.toPlainText())
         )
-        root.addWidget(editor)
+        root.addWidget(editor, 1)
 
         ts_str = (rec.timestamp_iso or "")[:16].replace("T", " ")
         meta_lbl = QLabel(f"{rec.author}  {ts_str}".strip(), card)
@@ -1164,10 +1173,8 @@ class PdfCanvas(QWidget):
         meta_lbl.setStyleSheet(f"color: {muted_col}; background: transparent; border: none;")
         root.addWidget(meta_lbl)
 
-        card.adjustSize()
-        sr = self._pdf_to_screen_rect(rec.rect_pdf)
-        px = max(6, min(max(6, self.width() - card.width() - 6), int(sr.right() + 8)))
-        py = max(6, min(max(6, self.height() - card.height() - 6), int(sr.top())))
+        px = max(4, min(max(4, self.width() - card_w - 4), int(round(sr.left()))))
+        py = max(4, min(max(4, self.height() - card_h - 4), int(round(sr.top()))))
         card.move(px, py)
         card.show()
         card.raise_()
@@ -1200,10 +1207,12 @@ class PdfCanvas(QWidget):
         pop_layout.setContentsMargins(6, 5, 6, 5)
         pop_layout.setSpacing(4)
 
-        hl_btn = AdaptiveButton(_tc("canvas.highlight", self._lang), pop, role="PrimaryAction")
-        hl_btn.setIcon(load_svg_icon("edit", color=p["primary_fg"], size=13))
-        hl_btn.setMinimumHeight(26)
-        hl_btn.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        hl_btn = AdaptiveButton("", pop, role="PrimaryAction")
+        hl_btn.setProperty("iconOnly", "true")
+        hl_btn.setFixedSize(26, 26)
+        hl_btn.setIconSize(QSize(14, 14))
+        hl_btn.setIcon(load_svg_icon("highlighter", color=p["primary_fg"], size=14))
+        hl_btn.setToolTip(_tc("canvas.highlight", self._lang))
 
         def _on_highlight() -> None:
             if self._selection_quads_pdf:
@@ -1213,7 +1222,7 @@ class PdfCanvas(QWidget):
             QTimer.singleShot(0, self._hide_popover)
 
         hl_btn.clicked.connect(_on_highlight)
-        pop_layout.addWidget(hl_btn)
+        pop_layout.addWidget(hl_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         for col in CLASSIC_HIGHLIGHT_PALETTE:
             sw = QPushButton("", pop)
@@ -1230,7 +1239,7 @@ class PdfCanvas(QWidget):
                 QTimer.singleShot(0, self._hide_popover)
 
             sw.clicked.connect(_on_swatch)
-            pop_layout.addWidget(sw)
+            pop_layout.addWidget(sw, 0, Qt.AlignmentFlag.AlignVCenter)
 
         note_btn = QPushButton("", pop)
         note_btn.setProperty("role", "GhostAction")
@@ -1892,7 +1901,14 @@ class PdfCanvas(QWidget):
                         painter.setBrush(dot_col)
                         painter.drawRect(QRectF(ap.x() - 2.0, ap.y() - 2.0, 4.0, 4.0))
 
-                if sr.width() >= 48.0 and sr.height() >= 30.0:
+                is_inline_editing = (
+                    rec.id == self._sticky_card_note_id
+                    and self._sticky_card is not None
+                    and shiboken6.isValid(self._sticky_card)
+                )
+                if is_inline_editing:
+                    pass
+                elif sr.width() >= 48.0 and sr.height() >= 30.0:
                     bg = QColor(
                         (255 * 4 + col.red()) // 5,
                         (255 * 4 + col.green()) // 5,

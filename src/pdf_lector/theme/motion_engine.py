@@ -129,10 +129,12 @@ class MotionBackdropWidget(QWidget):
         *,
         guard: MotionPerformanceGuard | None = None,
         is_viewer_surface: bool = False,
+        chrome_surface: bool = False,
     ) -> None:
         super().__init__(parent)
         self._guard = guard or MotionPerformanceGuard()
         self._is_viewer_surface = is_viewer_surface
+        self._chrome_surface = bool(chrome_surface)
         self._profile = ThemeProfile()
         self._heavy_task_active = False
         self._phase = 0.0
@@ -173,6 +175,10 @@ class MotionBackdropWidget(QWidget):
         )
 
     def _surface_enabled(self) -> bool:
+        if self._chrome_surface:
+            return self._profile.motion_level != "static" and (
+                self._profile.motion_preset != "none" or bool(self._profile.banner_path.strip())
+            )
         if self._is_viewer_surface:
             return self._profile.apply_to_viewer_backdrop
         return self._profile.apply_to_hub_banner
@@ -376,7 +382,11 @@ class MotionBackdropWidget(QWidget):
         w, h = float(self.width()), float(self.height())
         accent = QColor(palette.get("motion_cyan", palette["accent"]))
         alt = QColor(palette.get("motion_blue", palette["accent_alt"]))
-        cols, rows = 6, 4
+        if self._chrome_surface:
+            cols = max(2, min(14, int(round(w / 90.0))))
+            rows = max(2, min(10, int(round(h / 72.0))))
+        else:
+            cols, rows = 6, 4
         ptr = self._pointer_pos if self.pointer_interactive else None
         pts: list[list[QPointF]] = []
         for r in range(rows + 1):
@@ -476,9 +486,20 @@ class MotionBackdropWidget(QWidget):
         painter.fillRect(self.rect(), QColor(base_hex))
 
         if not self._surface_enabled():
+            if self._chrome_surface:
+                painter.setPen(QPen(QColor(palette["border_hairline"]), 1))
+                if self.objectName() == "Sidebar" and self.width() > 0:
+                    painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+                elif self.objectName() == "TopBar" and self.height() > 0:
+                    painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
             painter.end()
             return
 
+        eff_opacity = (
+            min(0.72, max(0.30, self._profile.opacity * 0.82))
+            if self._chrome_surface
+            else self._profile.opacity
+        )
         luminance = 0.85 if self._profile.base_mode == "light" else 0.15
         drew_custom_media = False
 
@@ -488,24 +509,24 @@ class MotionBackdropWidget(QWidget):
                 self._draw_cover_pixmap(
                     painter,
                     frame,
-                    self._profile.opacity,
+                    eff_opacity,
                     frame_tag=self._movie.currentFrameNumber(),
                 )
                 luminance = self._movie_frame_lum
                 drew_custom_media = True
         elif self._static_pixmap is not None:
-            self._draw_cover_pixmap(painter, self._static_pixmap, self._profile.opacity, frame_tag=-1)
+            self._draw_cover_pixmap(painter, self._static_pixmap, eff_opacity, frame_tag=-1)
             luminance = self._static_luminance
             drew_custom_media = True
 
         if not drew_custom_media:
             preset = self._profile.motion_preset
             if preset == "polygonal_mesh":
-                self._draw_polygonal_mesh(painter, palette, self._profile.opacity)
+                self._draw_polygonal_mesh(painter, palette, eff_opacity)
             elif preset == "fluid_aurora":
-                self._draw_fluid_aurora(painter, palette, self._profile.opacity)
+                self._draw_fluid_aurora(painter, palette, eff_opacity)
             elif preset == "arch_grid":
-                self._draw_arch_grid(painter, palette, self._profile.opacity)
+                self._draw_arch_grid(painter, palette, eff_opacity)
 
         # Readability veil (Auto-Scrim) calibrated to protect foreground text contrast.
         if drew_custom_media:
@@ -519,6 +540,13 @@ class MotionBackdropWidget(QWidget):
                 scrim_col = QColor(palette["bg_window_hex"])
                 scrim_col.setAlpha(scrim_alpha)
                 painter.fillRect(self.rect(), scrim_col)
+
+        if self._chrome_surface:
+            painter.setPen(QPen(QColor(palette["border_hairline"]), 1))
+            if self.objectName() == "Sidebar" and self.width() > 0:
+                painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+            elif self.objectName() == "TopBar" and self.height() > 0:
+                painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
         painter.end()
 

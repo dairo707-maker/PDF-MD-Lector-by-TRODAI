@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QRunnable, QSize, QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QFont, QIcon, QKeySequence, QShortcut
@@ -56,7 +56,7 @@ from ..core.updater import (
 )
 from ..core.usage_insights import LocalUsageInsights
 from ..core.win32_bridge import apply_trodai_window_chrome
-from ..theme.motion_engine import MotionPerformanceGuard, ViewTransitionController
+from ..theme.motion_engine import MotionBackdropWidget, MotionPerformanceGuard, ViewTransitionController
 from ..theme.palette import MONO_FONT_FAMILY, UI_FONT_FAMILY, build_trodai_qss, get_palette
 from ..theme.theme_profile import ThemeProfile, save_theme_profile
 from .hub_view import HubView
@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         self._is_fullscreen = False
         self._sidebar_collapsed = False
         self._prefs: UserPreferences = load_preferences()
+        self._unsaved_close_prompt_fn: Callable[[list[str]], str] | None = None
 
         self._profile_save_timer = QTimer(self)
         self._profile_save_timer.setSingleShot(True)
@@ -180,7 +181,12 @@ class MainWindow(QMainWindow):
         self._root_h_layout.setSpacing(0)
 
         # Collapsible Left Sidebar (226px expanded <-> 40px ribbon tab in Viewer)
-        self.sidebar = QWidget(self.root_canvas)
+        self.sidebar = MotionBackdropWidget(
+            self.root_canvas,
+            guard=self._guard,
+            is_viewer_surface=False,
+            chrome_surface=True,
+        )
         self.sidebar.setObjectName("Sidebar")
         self.sidebar.setFixedWidth(226)
         sidebar_root_lay = QVBoxLayout(self.sidebar)
@@ -326,7 +332,12 @@ class MainWindow(QMainWindow):
         main_col.setContentsMargins(0, 0, 0, 0)
         main_col.setSpacing(0)
 
-        self.topbar = QWidget(self.root_canvas)
+        self.topbar = MotionBackdropWidget(
+            self.root_canvas,
+            guard=self._guard,
+            is_viewer_surface=False,
+            chrome_surface=True,
+        )
         self.topbar.setObjectName("TopBar")
         self.topbar.setFixedHeight(48)
         tb_layout = QHBoxLayout(self.topbar)
@@ -1100,6 +1111,8 @@ class MainWindow(QMainWindow):
                 self._active_tool_workspace.apply_theme(self._profile.base_mode)
 
         self.nav_panel.set_animations_enabled(self._profile.motion_level != "static")
+        self.sidebar.set_profile(self._profile)
+        self.topbar.set_profile(self._profile)
         self.hub_view.apply_profile(self._profile)
         self.viewer_view.apply_profile(self._profile)
         self.studio_view.sync_from_profile(self._profile)
@@ -1147,7 +1160,93 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def confirm_unsaved_changes_before_close(
+        self,
+        *,
+        prompt_fn: Callable[[list[str]], str] | None = None,
+    ) -> str:
+        """Detect unsaved documents before exit and prompt Save / Discard / Cancel."""
+        dirty_names = self.viewer_view.unsaved_document_names()
+        if not dirty_names:
+            return "discard"
+
+        cb = prompt_fn or self._unsaved_close_prompt_fn
+        if cb is not None:
+            decision = str(cb(dirty_names)).strip().lower()
+            return decision if decision in ("save", "discard", "cancel") else "cancel"
+
+        if QApplication.platformName() == "offscreen":
+            return "discard"
+
+        lang = self._profile.language
+        listed = "\n".join(f"- {name}" for name in dirty_names[:8])
+        if len(dirty_names) > 8:
+            listed += f"\n... (+{len(dirty_names) - 8})"
+
+        texts = {
+            "es": (
+                "Cambios sin guardar",
+                f"Hay cambios sin guardar en:\n{listed}",
+                "Deseas guardar los cambios antes de cerrar la aplicacion?",
+                "Guardar y cerrar",
+                "Cerrar sin guardar",
+                "Cancelar",
+            ),
+            "en": (
+                "Unsaved changes",
+                f"There are unsaved changes in:\n{listed}",
+                "Do you want to save your changes before closing?",
+                "Save & Close",
+                "Close without saving",
+                "Cancel",
+            ),
+            "pt": (
+                "Alteracoes nao salvas",
+                f"Ha alteracoes nao salvas em:\n{listed}",
+                "Deseja salvar as alteracoes antes de fechar?",
+                "Salvar e fechar",
+                "Fechar sem salvar",
+                "Cancelar",
+            ),
+        }.get(lang, None)
+        if texts is None:
+            texts = (
+                "Cambios sin guardar",
+                f"Hay cambios sin guardar en:\n{listed}",
+                "Deseas guardar los cambios antes de cerrar la aplicacion?",
+                "Guardar y cerrar",
+                "Cerrar sin guardar",
+                "Cancelar",
+            )
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(texts[0])
+        box.setText(texts[1])
+        box.setInformativeText(texts[2])
+        btn_save = box.addButton(texts[3], QMessageBox.ButtonRole.AcceptRole)
+        btn_discard = box.addButton(texts[4], QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(texts[5], QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(btn_save)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_save:
+            return "save"
+        if clicked is btn_discard:
+            return "discard"
+        return "cancel"
+
     def closeEvent(self, event) -> None:
+        if self.has_unsaved_changes():
+            decision = self.confirm_unsaved_changes_before_close()
+            if decision == "cancel":
+                event.ignore()
+                return
+            if decision == "save":
+                self.save_all_documents()
+                if self.has_unsaved_changes():
+                    event.ignore()
+                    return
         if self._autosave_timer.isActive():
             self._autosave_timer.stop()
         if self._autosave_debounce_timer.isActive():
@@ -1159,6 +1258,8 @@ class MainWindow(QMainWindow):
         if self._profile_save_timer.isActive():
             self._profile_save_timer.stop()
             self._flush_profile_save()
+        self.sidebar.cleanup()
+        self.topbar.cleanup()
         self.hub_view.cleanup()
         self.viewer_view.cleanup()
         self.studio_view.cleanup()

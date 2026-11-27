@@ -4,13 +4,13 @@
 >
 > Lee primero [`CLAUDE.md`](../CLAUDE.md) para las reglas no negociables del proyecto y comandos en OneDrive.
 
-- **Ultima actualizacion:** `2026-11-26T23:59Z`
-- **Base validada previa:** `v0.4.0` (`M9`, GitHub Release `v0.4.0`)
-- **Version entregada:** `0.4.1` (`PDF/MD Lector · by TRODAI`)
+- **Ultima actualizacion:** `2026-11-27T04:34Z`
+- **Base validada previa:** `v0.4.1` (`M10`, GitHub Release `v0.4.1`)
+- **Version entregada:** `0.4.2` (`PDF/MD Lector · by TRODAI`)
 
 ---
 
-## 1. Mapa de Hitos (M1–M10 + Pista E2E)
+## 1. Mapa de Hitos (M1–M11 + Pista E2E)
 
 | Hito | Alcance principal | Estado actual | Notas / Dependencias |
 |---|---|---|---|
@@ -25,6 +25,7 @@
 | **M8 (`v0.3.0`)** | Botones flotantes sin recuadros e iconos centrados (`32x32` `iconOnly="true"`, cero recortes, `FlowContainer`), TopBar/Visor depurados sin duplicados, idioma fijo desde instalador (`read_installer_language`), Wiktionary por defecto con parser wikitext `w/api.php` + fallback REST `en.wiktionary.org` + sugerencias `opensearch` + cache SQLite, busqueda en documento (`Ctrl+F`) con resaltado PDFium, impresion del sistema (`Ctrl+P` `PrintPdfDialog` con `QPrinterInfo`), Modo Presentacion (`F5` / `Ctrl+L` + compatibilidad con apuntadores inalambricos + HUD inferior ocultable), listado de atajos (`F1` `ShortcutsDialog`), movimiento reactivo al puntero exclusivo en Hero del Hub (`motion_engine.py`), release firmado `v0.3.0` | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/prototype`: `85 passed in 147.91s`; E2E `test_tier1_features` + `v0.3.0`; `FIRST_FRAME_MS=62.36`; live Wiktionary ES/EN OK; capturas `v4/` verificadas) | GitHub Release `v0.3.0` |
 | **M9 (`v0.4.0`)** | Contraste notas en modo oscuro (`QTextEdit` + `#F8FAFC`/`#111C2E` en `StickyNoteCard`), coordenadas de resaltado bloqueadas al lienzo durante scroll (`set_rendered_image` sin `setFixedSize` + `_effective_scale()`), herramienta `Resaltado libre` (`free_highlight` ISO 32000 `/Ink` `/CA` + `Multiply`), zoom ampliado `10% - 1200%` (con tope raster `4096px` y cache `128 MB`), notas visibles en pagina con puntos de redimensionado (`resize_sticky_note`) y linea guia sutil (`/TRODAIAnchor`), toggle ocultar/mostrar notas (`Ctrl+Shift+N` + ojo en barra y `NotesPanel`), compartir PDF como adjunto (`share_service.py`: `MAPISendMailW` + `CF_HDROP` + WhatsApp/Telegram/Teams + `ShareDocumentDialog`) | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/m9/prototype`: `90 passed in 157.87s`; `SVG_CHECK: OK 70 icons`; `EMOJI_CHECK: OK`; `FIRST_FRAME_MS=46.70`; capturas `v5/` verificadas) | GitHub Release `v0.4.0` |
 | **M10 (`v0.4.1`)** | Notas adhesivas ISO 32000 nativas `/FreeTextCallout` (`/IT /FreeTextCallout`, `/CL`, `/RD`, `/AP /N` con linea guia, encabezado y texto visible en Acrobat/Edge/Chrome + roundtrip sin perdidas), hipervinculos PDF (`/Link` externo `http`/`https`/`mailto` e interno `/GoTo` + autodetectados WebLinks con filtro de seguridad `is_safe_pdf_uri`), cursor `IBeamCursor` cerca de texto seleccionable, preservacion de posicion exacta de lectura en Zoom In/Out (`set_zoom`), cinta de anotaciones solo iconos poligonales (`cursor.svg`, `free_highlight.svg`, `touch.svg`) con muestras de color centradas verticalmente, actualizador directo en 1 clic oculto al estar al dia (`Actualizar y reiniciar ahora` + fix `launch_detached_update`), y notas de release renderizadas en HTML (`QTextBrowser` seguro) | **COMPLETED** (`test_m1/m3/m4/m5_*/m6/m7/m8/m9/m10/prototype`: `95 passed in 270.12s`; `STATIC_CHECKS_OK svgs=73`; capturas `v6/` verificadas; build firmado `Valid`) | GitHub Release `v0.4.1` |
+| **M11 (`v0.4.2`)** | Fix BUG de notas fijas/duplicadas que no se ocultaban con el boton del ojo (`PdfDocumentSession.render_page/get_cached_page/AsyncPageRenderTask` con parametro `draw_annots` + `draw_annots=False` dentro de `PdfTabPage` conservando `draw_annots=True` en impresion/miniaturas/visores externos), y malla animada reactiva al puntero activada en `TopBar` y `Sidebar` (`MotionBackdropWidget(..., chrome_surface=True)`, manteniendo el Visor PDF limpio/quieto) | **COMPLETED** (`test_m1/m3/m4/m5_*/m6/m7/m8/m9/m10/m11/prototype`: `97 passed in 239.33s`; capturas `v7/` verificadas; build firmado `Valid`) | GitHub Release `v0.4.2` |
 
 ---
 
@@ -175,6 +176,17 @@ Si tomas el relevo tras una interrupcion o limite de cuota:
       - `PDF-MD-Lector.exe` (`Valid`)
       - `PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `d2055992090d05a104c26b46efa905e0dbfa953d11a34465a6a37abdd3ab560d`)
       - `PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `9ad831de234b104cc7b8acc41ccd2f0c4ac4bc9e97dd175f4c452195103c6889`)
+- **2026-11-26 23:35 (-05) — Hito M11 (`v0.4.2`) -> `COMPLETED`:**
+  - **Archivos creados:** `tests/test_m11_v042_fixes.py`.
+  - **Archivos actualizados:** `VERSION` (`0.4.2`), `pyproject.toml`, `packaging/installer.iss`, `src/pdf_lector/__init__.py`, `src/pdf_lector/api/schemas.py`, `src/pdf_lector/core/pdf_engine.py`, `src/pdf_lector/theme/{motion_engine,palette}.py`, `src/pdf_lector/ui/{main_window,viewer_view}.py`, `CHANGELOG.md`, `docs/HANDOFF_STATUS.md`, `tests/{test_m1_foundation_security,test_m4_ui_updater,test_m5_packaging_docs}.py`, `tests/e2e/test_tier1_features.py`.
+  - **Resultados exactos de verificacion:**
+    - Suite completa (`python -m pytest` sobre 12 modulos `test_m1`, `test_m3`, `test_m4`, `test_m5_*`, `test_m6`..`test_m11`, `test_prototype_theme_motion_splash`): `97 passed in 239.33s (0:03:59)` (exit `0`).
+    - Capturas `v7/` verificadas visualmente (ocultado total de notas guardadas + malla poligonal reactiva al puntero en `TopBar`, `Sidebar` y `Hub Hero`).
+    - Compilacion + firma local (`$env:PDF_LECTOR_SIGN_LOCAL="1"; uv run --no-sync python scripts/build_exe.py`):
+      - `PDF-MD-Lector.exe` (`Valid`)
+      - `PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `5bef89438c3b11acecda9a4658d93850d5a111db9141322e3beec9d1a46a4891`)
+      - `PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `5ad61a7003523fd3368bb5882d946f6a702126c00a8bb77fe9d945b00c6dcb49`)
+
 
 
 

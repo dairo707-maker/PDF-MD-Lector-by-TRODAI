@@ -140,6 +140,11 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
         border-right: 1px solid {p["border_hairline"]};
     }}
 
+    QWidget#SidebarRibbon {{
+        background: transparent;
+        border: none;
+    }}
+
     QWidget#TopBar {{
         background-color: {p["bg_sidebar"]};
         border-bottom: 1px solid {p["border_hairline"]};

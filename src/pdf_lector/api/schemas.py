@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     status: str = "ok"
     app: str = "PDF/MD Lector"
-    version: str = "0.4.1"
+    version: str = "0.4.2"
 
 
 class ToolParamSchema(BaseModel):
