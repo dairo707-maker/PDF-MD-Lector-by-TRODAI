@@ -101,6 +101,8 @@ class HubView(QWidget):
         super().__init__(parent)
         self._lang = "es"
         self._mode = "dark"
+        self._applied_theme_mode = ""
+        self._pending_theme_profile: ThemeProfile | None = None
         self._insights = insights or LocalUsageInsights()
         self._recent_store = recent_store or RecentDocumentsStore()
         self._guard = guard or MotionPerformanceGuard()
@@ -350,7 +352,6 @@ class HubView(QWidget):
             w = item.widget()
             if w is not None and shiboken6.isValid(w):
                 w.hide()
-                w.setParent(None)
                 w.deleteLater()
         self._recent_row_refs.clear()
 
@@ -419,7 +420,6 @@ class HubView(QWidget):
             w = item.widget()
             if w is not None and shiboken6.isValid(w):
                 w.hide()
-                w.setParent(None)
                 w.deleteLater()
 
     def _rebuild_quick_actions(self) -> None:
@@ -587,9 +587,13 @@ class HubView(QWidget):
 
     def apply_profile(self, profile: ThemeProfile) -> None:
         self._mode = profile.base_mode
+        self._pending_theme_profile = None
+        self.hero_backdrop.set_profile(profile)
+        if self._mode == self._applied_theme_mode:
+            return
+        self._applied_theme_mode = self._mode
         p = get_palette(self._mode)
 
-        self.hero_backdrop.set_profile(profile)
         self.hero_eyebrow.setStyleSheet(f"color: {p['text_secondary']};")
         self.hero_open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
         self.hero_studio_btn.setIcon(load_svg_icon("palette", color=p["icon_color"], size=15))
@@ -608,6 +612,17 @@ class HubView(QWidget):
         for _, _, _, _, _, _, cards in self._category_widgets:
             for _, _, card in cards:
                 card.apply_theme(self._mode)
+
+    def defer_profile(self, profile: ThemeProfile) -> None:
+        """Record a pending profile while offscreen without iterating 58+ cards immediately."""
+        self._mode = profile.base_mode
+        self._pending_theme_profile = profile
+
+    def ensure_theme_synced(self) -> None:
+        """Flush any deferred theme profile before becoming active."""
+        pending = self._pending_theme_profile
+        if pending is not None:
+            self.apply_profile(pending)
 
     def all_tool_cards(self) -> list[ToolCard]:
         out: list[ToolCard] = []

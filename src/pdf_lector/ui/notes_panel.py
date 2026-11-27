@@ -234,7 +234,6 @@ class NotesPanel(QFrame):
             w = item.widget()
             if w is not None:
                 w.hide()
-                w.setParent(None)
                 w.deleteLater()
 
         p = get_palette(self._mode)

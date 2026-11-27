@@ -3,6 +3,19 @@
 All notable changes to **PDF/MD Lector by TRODAI** are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-11-27
+
+### Performance
+- **Smooth Zero-Freeze Dark <-> Light Theme Switching (`theme/motion_engine.py`, `theme/palette.py`, `ui/pdf_canvas.py`, `ui/hub_view.py`, `ui/viewer_view.py`, `ui/main_window.py`):**
+  - Removed global `QApplication` `eventFilter` installations from `MotionBackdropWidget` (replacing pointer parallax tracking with cursor polling during active animation ticks + local mouse events) and consolidated `PdfCanvas` per-page stylus filters into a single `_TabletProximityRouter` suspended during `app.setStyleSheet(...)`.
+  - Fixed `setParent(None)` orphan widget leaks in `HubView`, `DictionaryPanel`, `NotesPanel`, and `MainWindow` dynamic containers, removed universal `* { font-family }` cascade invalidation from `build_trodai_qss()`, batched theme switching with `setUpdatesEnabled(False/True)`, and deferred non-active stack view / background tab theme updates cleanly.
+- **Multi-Tab PDF Memory & Rendering Hardening (`core/pdf_engine.py`, `ui/pdf_canvas.py`, `ui/viewer_view.py`):**
+  - Lowered in-memory PDF byte buffer threshold (`16 MB`) and active per-session `QImage` LRU budget (`16` entries / `48 MB`), added `get_page_size` lookup caching, cooperative `is_stale_fn` task cancellation, bounded canvas pixmap eviction outside the visible viewport (`± 2` pages), lazy non-blocking async thumbnail loading (`AsyncThumbnailRenderTask`), and automatic background tab trimming (`4` entries / `12 MB`) on tab switch.
+
+### Added
+- **Windows Explorer Foreground Activation (`core/win32_bridge.py`, `core/single_instance.py`, `ui/main_window.py`, `app.py`):** Added `allow_set_foreground_window()` (`ASFW_ANY`) in secondary IPC forwarders and `bring_window_to_foreground(hwnd)` (`SW_RESTORE` + `AttachThreadInput` + `SetForegroundWindow` fallback) inside `MainWindow.bring_to_front()`, ensuring files opened directly from Windows Explorer bring/restore the window to the foreground.
+- **Complete `Ajustar` Fit & Page-Layout Dropdown Menu (`ui/viewer_view.py`):** Upgraded `fit_btn` (`FitMenuBtn`) into a checkable dropdown menu featuring *Ajustar al ancho (`Ctrl+0`)*, *Tamano real 100% (`Ctrl+1`)*, *Ajustar a una pagina (`Ctrl+2`)*, *Ajustar al alto (`Ctrl+3`)*, and page layout modes (*Desplazamiento continuo*, *Pagina individual*, *Dos paginas lado a lado* via `QGridLayout`), with viewport-resize auto-refit while in a dynamic fit mode.
+
 ## [0.4.3] - 2026-11-27
 
 ### Fixed

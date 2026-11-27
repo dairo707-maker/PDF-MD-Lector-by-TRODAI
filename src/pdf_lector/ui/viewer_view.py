@@ -5,17 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Union
 
-from PySide6.QtCore import QSize, QThreadPool, QTimer, Qt, Signal
-from PySide6.QtGui import QFont, QIcon, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QEvent, QSize, QThreadPool, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QActionGroup, QFont, QIcon, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -35,7 +37,7 @@ from ..core.path_guard import (
     validate_local_markdown_path,
     validate_local_pdf_path,
 )
-from ..core.pdf_engine import AsyncPageRenderTask, PdfDocumentSession, SearchHit
+from ..core.pdf_engine import AsyncPageRenderTask, AsyncThumbnailRenderTask, PdfDocumentSession, SearchHit
 from ..core.win32_bridge import apply_trodai_window_chrome
 from ..theme.motion_engine import MotionBackdropWidget, MotionPerformanceGuard
 from ..theme.palette import UI_FONT_FAMILY, get_palette
@@ -78,6 +80,14 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.rail.close": "Cerrar panel",
         "viewer.rail.thumbs_title": "Miniaturas",
         "viewer.rail.toc_title": "Indice y marcadores",
+        "viewer.fit.menu_title": "Ajustar y vista",
+        "viewer.fit.width": "Ajustar al ancho (Ctrl+0)",
+        "viewer.fit.page": "Ajustar a una pagina (Ctrl+2)",
+        "viewer.fit.height": "Ajustar al alto (Ctrl+3)",
+        "viewer.fit.actual": "Tamano real 100% (Ctrl+1)",
+        "viewer.layout.continuous": "Desplazamiento continuo",
+        "viewer.layout.single": "Pagina individual",
+        "viewer.layout.two_page": "Dos paginas (lado a lado)",
         "dict.floating_title": "Diccionario · PDF/MD Lector",
     },
     "en": {
@@ -107,6 +117,14 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.rail.close": "Close panel",
         "viewer.rail.thumbs_title": "Thumbnails",
         "viewer.rail.toc_title": "Index & Bookmarks",
+        "viewer.fit.menu_title": "Fit & View",
+        "viewer.fit.width": "Fit to width (Ctrl+0)",
+        "viewer.fit.page": "Fit one page (Ctrl+2)",
+        "viewer.fit.height": "Fit to height (Ctrl+3)",
+        "viewer.fit.actual": "Actual size 100% (Ctrl+1)",
+        "viewer.layout.continuous": "Continuous scroll",
+        "viewer.layout.single": "Single page",
+        "viewer.layout.two_page": "Two pages (side by side)",
         "dict.floating_title": "Dictionary · PDF/MD Lector",
     },
     "pt": {
@@ -136,6 +154,14 @@ _LOCAL_VIEWER_TEXTS: dict[str, dict[str, str]] = {
         "viewer.rail.close": "Fechar painel",
         "viewer.rail.thumbs_title": "Miniaturas",
         "viewer.rail.toc_title": "Indice e marcadores",
+        "viewer.fit.menu_title": "Ajustar e visualizacao",
+        "viewer.fit.width": "Ajustar a largura (Ctrl+0)",
+        "viewer.fit.page": "Ajustar a uma pagina (Ctrl+2)",
+        "viewer.fit.height": "Ajustar a altura (Ctrl+3)",
+        "viewer.fit.actual": "Tamanho real 100% (Ctrl+1)",
+        "viewer.layout.continuous": "Rolagem continua",
+        "viewer.layout.single": "Pagina individual",
+        "viewer.layout.two_page": "Duas paginas (lado a lado)",
         "dict.floating_title": "Dicionario · PDF/MD Lector",
     },
 }
@@ -219,6 +245,9 @@ class PdfTabPage(QWidget):
         self._mode = "dark"
         self._applied_theme_mode = ""
         self._continuous_scroll = bool(continuous_scroll)
+        self._page_layout_mode = "continuous" if self._continuous_scroll else "single"
+        self._fit_mode = "custom"
+        self._render_generation = 0
         self._rail_visible = False
         self._rail_mode = "thumbs"
         self._thumbs_open = False
@@ -229,6 +258,8 @@ class PdfTabPage(QWidget):
         self._floating_toc_win: _FloatingPaneWindow | None = None
         self._active_tasks: dict[int, AsyncPageRenderTask] = {}
         self._rendered_signatures: dict[int, tuple[float, int]] = {}
+        self._rendered_thumbs: set[int] = set()
+        self._active_thumb_tasks: dict[int, AsyncThumbnailRenderTask] = {}
         self._profile = ThemeProfile()
         self._shared_ann_store = SharedAnnotationState()
         self.shared_annotations = self._shared_ann_store
@@ -366,6 +397,11 @@ class PdfTabPage(QWidget):
         self.thumb_list.setIconSize(QSize(112, 146))
         self.thumb_list.setSpacing(6)
         self.thumb_list.currentRowChanged.connect(self._on_thumb_selected)
+        self._thumb_scroll_timer = QTimer(self)
+        self._thumb_scroll_timer.setSingleShot(True)
+        self._thumb_scroll_timer.setInterval(40)
+        self._thumb_scroll_timer.timeout.connect(self._render_visible_thumbnails)
+        self.thumb_list.verticalScrollBar().valueChanged.connect(lambda _v: self._thumb_scroll_timer.start())
         thumb_layout.addWidget(self.thumb_list, 1)
         self.rail_splitter.addWidget(self.thumb_pane)
         self.rail_splitter.setSizes([250, 260])
@@ -492,20 +528,27 @@ class PdfTabPage(QWidget):
 
         self.page_host = QWidget(self.scroll)
         self.page_host.setObjectName("TransparentHost")
-        self.page_host_layout = QVBoxLayout(self.page_host)
+        self.page_host_layout = QGridLayout(self.page_host)
         self.page_host_layout.setContentsMargins(20, 18, 20, 24)
-        self.page_host_layout.setSpacing(16)
+        self.page_host_layout.setHorizontalSpacing(16)
+        self.page_host_layout.setVerticalSpacing(16)
         self.page_host_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
 
         self._page_canvases: list[PdfCanvas] = []
         self._rebuild_page_canvases()
 
         self.scroll.setWidget(self.page_host)
+        self.scroll.viewport().installEventFilter(self)
         self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self._scroll_render_timer = QTimer(self)
         self._scroll_render_timer.setSingleShot(True)
         self._scroll_render_timer.setInterval(25)
         self._scroll_render_timer.timeout.connect(self.render_visible_pages)
+
+        self._auto_refit_timer = QTimer(self)
+        self._auto_refit_timer.setSingleShot(True)
+        self._auto_refit_timer.setInterval(60)
+        self._auto_refit_timer.timeout.connect(self._apply_active_fit_mode)
 
         backdrop_layout.addWidget(self.scroll, 1)
         root.addWidget(self.canvas_frame, 1)
@@ -530,6 +573,7 @@ class PdfTabPage(QWidget):
         while self._page_canvases:
             c = self._page_canvases.pop()
             self.page_host_layout.removeWidget(c)
+            c.cleanup()
             c.hide()
             c.deleteLater()
 
@@ -545,12 +589,29 @@ class PdfTabPage(QWidget):
             c.zoom_delta_requested.connect(lambda d: self.set_zoom(self.zoom + (d * max(1.0, self.zoom * 0.55))))
             c.pan_delta_requested.connect(self._pan_scroll_by)
             c.link_page_requested.connect(self.set_page)
-            if not self._continuous_scroll:
-                c.setVisible(idx == self.current_page)
-            self.page_host_layout.addWidget(c, 0, Qt.AlignmentFlag.AlignHCenter)
             self._page_canvases.append(c)
 
+        self._place_page_canvases()
         self.pdf_canvas: PdfCanvas = self._page_canvases[min(self.current_page, len(self._page_canvases) - 1)]
+
+    def _place_page_canvases(self) -> None:
+        while self.page_host_layout.count():
+            self.page_host_layout.takeAt(0)
+        if self._page_layout_mode == "two_page":
+            self._continuous_scroll = True
+            for idx, c in enumerate(self._page_canvases):
+                c.setVisible(True)
+                self.page_host_layout.addWidget(c, idx // 2, idx % 2, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        elif self._page_layout_mode == "single":
+            self._continuous_scroll = False
+            for idx, c in enumerate(self._page_canvases):
+                c.setVisible(idx == self.current_page)
+                self.page_host_layout.addWidget(c, idx, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        else:
+            self._continuous_scroll = True
+            for idx, c in enumerate(self._page_canvases):
+                c.setVisible(True)
+                self.page_host_layout.addWidget(c, idx, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
 
     def _on_canvas_tool_mode_changed(self, active_mode: str) -> None:
         self._sync_tool_buttons(active_mode)
@@ -618,13 +679,30 @@ class PdfTabPage(QWidget):
         return self.annot_bar.isVisible()
 
     def set_continuous_scroll(self, enabled: bool) -> None:
-        want = bool(enabled)
-        if want == self._continuous_scroll:
+        self.set_page_layout_mode("continuous" if enabled else "single")
+
+    def page_layout_mode(self) -> str:
+        return self._page_layout_mode
+
+    def fit_mode(self) -> str:
+        return self._fit_mode
+
+    def set_page_layout_mode(self, mode: str) -> None:
+        clean = mode if mode in ("continuous", "single", "two_page") else "continuous"
+        if clean == self._page_layout_mode:
             return
-        self._continuous_scroll = want
-        for idx, c in enumerate(self._page_canvases):
-            c.setVisible(True if want else (idx == self.current_page))
-        QTimer.singleShot(0, lambda: self.set_page(self.current_page))
+        self._page_layout_mode = clean
+        self._place_page_canvases()
+        if self._fit_mode in ("fit_width", "fit_page", "fit_height"):
+            self._apply_active_fit_mode()
+        QTimer.singleShot(0, lambda: self.set_page(self.current_page) if shiboken6.isValid(self) else None)
+        self.state_changed.emit()
+
+    def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
+        if watched is self.scroll.viewport() and event.type() == QEvent.Type.Resize:
+            if self._fit_mode in ("fit_width", "fit_page", "fit_height"):
+                self._auto_refit_timer.start()
+        return super().eventFilter(watched, event)
 
     def _pan_scroll_by(self, dx: float, dy: float) -> None:
         hbar = self.scroll.horizontalScrollBar()
@@ -651,6 +729,7 @@ class PdfTabPage(QWidget):
             for idx, c in enumerate(self._page_canvases):
                 c.set_session(self.session, page_index=idx)
         if saved:
+            self._render_generation += 1
             self._rendered_signatures.clear()
             self.render_visible_pages()
             self.state_changed.emit()
@@ -801,6 +880,8 @@ class PdfTabPage(QWidget):
                 self._floating_thumb_win.show()
                 self._floating_thumb_win.raise_()
         self._sync_pane_visibility()
+        if self._thumbs_open:
+            QTimer.singleShot(0, self._render_visible_thumbnails)
 
     def set_toc_open(self, want_open: bool) -> None:
         self._toc_open = bool(want_open)
@@ -831,6 +912,7 @@ class PdfTabPage(QWidget):
         self._floating_thumb_win.raise_()
         self._sync_detach_icons()
         self._sync_pane_visibility()
+        QTimer.singleShot(0, self._render_visible_thumbnails)
 
     def dock_thumbs(self, *, show_docked: bool = True) -> None:
         if self._floating_thumb_win is not None and shiboken6.isValid(self._floating_thumb_win):
@@ -900,21 +982,74 @@ class PdfTabPage(QWidget):
         return self._rail_mode
 
     def _populate_thumbnails(self) -> None:
+        self._rendered_thumbs.clear()
+        self._active_thumb_tasks.clear()
         self.thumb_list.blockSignals(True)
         self.thumb_list.clear()
         total = self.session.page_count
         for idx in range(total):
             item = QListWidgetItem(f"{idx + 1}")
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            try:
-                thumb = self.session.render_thumbnail(idx, width=104)
-                item.setIcon(QIcon(QPixmap.fromImage(thumb)))
-            except Exception:
-                pass
             self.thumb_list.addItem(item)
         if total > 0:
             self.thumb_list.setCurrentRow(self.current_page)
         self.thumb_list.blockSignals(False)
+        if self._thumbs_open:
+            QTimer.singleShot(0, self._render_visible_thumbnails)
+
+    def _visible_thumbnail_rows(self) -> list[int]:
+        total = self.thumb_list.count()
+        if total <= 0:
+            return []
+        vp_rect = self.thumb_list.viewport().rect()
+        top_idx = self.thumb_list.indexAt(vp_rect.topLeft()).row() if not vp_rect.isEmpty() else -1
+        bot_idx = self.thumb_list.indexAt(vp_rect.bottomRight()).row() if not vp_rect.isEmpty() else -1
+        if top_idx < 0:
+            start = max(0, self.current_page - 3)
+            end = min(total - 1, start + 10)
+        else:
+            start = max(0, top_idx - 2)
+            end = min(total - 1, (bot_idx if bot_idx >= top_idx else top_idx + 8) + 4)
+        return list(range(start, end + 1))
+
+    def _render_visible_thumbnails(self) -> None:
+        if not shiboken6.isValid(self) or not self._thumbs_open or self.session.page_count <= 0:
+            return
+        gen = self._render_generation
+        queued = 0
+        for row in self._visible_thumbnail_rows():
+            if row in self._rendered_thumbs or row in self._active_thumb_tasks:
+                continue
+            task = AsyncThumbnailRenderTask(
+                self.session,
+                self.session.doc_id,
+                row,
+                width=104,
+                is_stale_fn=lambda g=gen: (not shiboken6.isValid(self)) or (g != self._render_generation),
+            )
+            self._active_thumb_tasks[row] = task
+            task.signals.rendered.connect(self._on_thumb_rendered, Qt.ConnectionType.QueuedConnection)
+            task.signals.failed.connect(self._on_thumb_failed, Qt.ConnectionType.QueuedConnection)
+            QThreadPool.globalInstance().start(task)
+            queued += 1
+            if queued >= 12:
+                break
+
+    def _on_thumb_rendered(self, doc_id: str, page_index: int, image: QImage) -> None:
+        self._active_thumb_tasks.pop(page_index, None)
+        if not shiboken6.isValid(self) or doc_id != self.session.doc_id:
+            return
+        if 0 <= page_index < self.thumb_list.count():
+            item = self.thumb_list.item(page_index)
+            if item is not None:
+                pm = QPixmap.fromImage(image)
+                if not pm.isNull():
+                    item.setIcon(QIcon(pm))
+                self._rendered_thumbs.add(page_index)
+
+    def _on_thumb_failed(self, doc_id: str, page_index: int, error: str) -> None:
+        del doc_id, error
+        self._active_thumb_tasks.pop(page_index, None)
 
     def _on_thumb_selected(self, row: int) -> None:
         if 0 <= row < self.session.page_count and row != self.current_page:
@@ -932,7 +1067,8 @@ class PdfTabPage(QWidget):
         if not self._continuous_scroll or self._programmatic_scroll or not self._page_canvases:
             return
         for c in self._page_canvases:
-            c.hide_popover()
+            if c._popover is not None:
+                c.hide_popover()
 
         vbar = self.scroll.verticalScrollBar()
         vp_h = max(1, self.scroll.viewport().height())
@@ -990,7 +1126,9 @@ class PdfTabPage(QWidget):
         words = self.session.extract_page_words(self.current_page, limit=16)
         self.page_words_ready.emit(words)
 
-    def set_zoom(self, zoom: float) -> None:
+    def set_zoom(self, zoom: float, *, _preserve_fit_mode: bool = False) -> None:
+        if not _preserve_fit_mode:
+            self._fit_mode = "custom"
         target_zoom = max(0.10, min(12.0, round(float(zoom), 2)))
         vbar = self.scroll.verticalScrollBar()
         hbar = self.scroll.horizontalScrollBar()
@@ -1029,6 +1167,8 @@ class PdfTabPage(QWidget):
             rel_x = (h_center - float(c_old.x())) / max(1.0, float(c_old.width()))
 
         self.zoom = target_zoom
+        self._render_generation += 1
+        self._active_tasks.clear()
         self._rendered_signatures.clear()
         for c in self._page_canvases:
             c.set_rotation_and_zoom(self.rotation, self.zoom)
@@ -1067,23 +1207,86 @@ class PdfTabPage(QWidget):
     def notes_visible(self) -> bool:
         return bool(self._page_canvases and self._page_canvases[0].notes_visible())
 
-    def fit_width(self) -> None:
-        avail_w = max(240, self.scroll.viewport().width() - 64)
-        base_w = 612.0
-        if 0 <= self.current_page < self.session.page_count:
+    def _effective_page_points(self, page_index: int) -> tuple[float, float]:
+        pw, ph = (612.0, 792.0)
+        if 0 <= page_index < self.session.page_count:
             try:
-                pw, ph = self.session.get_page_size(self.current_page)
-                base_w = max(120.0, ph if self.rotation in (90, 270) else pw)
+                pw, ph = self.session.get_page_size(page_index)
             except Exception:
-                pass
-        self.set_zoom(avail_w / base_w)
+                pw, ph = (612.0, 792.0)
+        if self.rotation in (90, 270):
+            return (max(120.0, ph), max(120.0, pw))
+        return (max(120.0, pw), max(120.0, ph))
+
+    def _effective_spread_dimensions(self) -> tuple[float, float]:
+        pw0, ph0 = self._effective_page_points(self.current_page)
+        if self._page_layout_mode == "two_page" and self.session.page_count >= 2:
+            left_idx = self.current_page - (self.current_page % 2)
+            right_idx = left_idx + 1
+            pw_l, ph_l = self._effective_page_points(left_idx)
+            if right_idx < self.session.page_count:
+                pw_r, ph_r = self._effective_page_points(right_idx)
+                return (pw_l + pw_r + 16.0, max(ph_l, ph_r))
+            return (pw_l, ph_l)
+        return (pw0, ph0)
+
+    def fit_width(self) -> None:
+        self._fit_mode = "fit_width"
+        avail_w = max(240, self.scroll.viewport().width() - 56)
+        base_w, _ = self._effective_spread_dimensions()
+        self.set_zoom(avail_w / max(120.0, base_w), _preserve_fit_mode=True)
+
+    def fit_page(self) -> None:
+        self._fit_mode = "fit_page"
+        avail_w = max(240, self.scroll.viewport().width() - 56)
+        avail_h = max(200, self.scroll.viewport().height() - 48)
+        base_w, base_h = self._effective_spread_dimensions()
+        scale = min(avail_w / max(120.0, base_w), avail_h / max(120.0, base_h))
+        self.set_zoom(scale, _preserve_fit_mode=True)
+        if self._continuous_scroll and 0 <= self.current_page < len(self._page_canvases):
+            def _align_fit_page() -> None:
+                if not shiboken6.isValid(self) or self._fit_mode != "fit_page":
+                    return
+                c = self._page_canvases[self.current_page]
+                self._programmatic_scroll = True
+                try:
+                    self.scroll.verticalScrollBar().setValue(max(0, c.y() - 16))
+                finally:
+                    self._programmatic_scroll = False
+
+            QTimer.singleShot(0, _align_fit_page)
+
+    def fit_height(self) -> None:
+        self._fit_mode = "fit_height"
+        avail_h = max(200, self.scroll.viewport().height() - 48)
+        _, base_h = self._effective_spread_dimensions()
+        self.set_zoom(avail_h / max(120.0, base_h), _preserve_fit_mode=True)
+
+    def set_actual_size(self) -> None:
+        self._fit_mode = "actual_size"
+        self.set_zoom(1.0, _preserve_fit_mode=True)
+
+    def _apply_active_fit_mode(self) -> None:
+        if not shiboken6.isValid(self):
+            return
+        if self._fit_mode == "fit_width":
+            self.fit_width()
+        elif self._fit_mode == "fit_page":
+            self.fit_page()
+        elif self._fit_mode == "fit_height":
+            self.fit_height()
 
     def rotate_cw(self) -> None:
         self.rotation = (self.rotation + 90) % 360
+        self._render_generation += 1
+        self._active_tasks.clear()
         self._rendered_signatures.clear()
         for c in self._page_canvases:
             c.set_rotation_and_zoom(self.rotation, self.zoom)
-        self.render_visible_pages()
+        if self._fit_mode in ("fit_width", "fit_page", "fit_height"):
+            self._apply_active_fit_mode()
+        else:
+            self.render_visible_pages()
         self.state_changed.emit()
 
     def _visible_page_indices(self) -> list[int]:
@@ -1102,11 +1305,11 @@ class PdfTabPage(QWidget):
                 hits.append(idx)
         if self.current_page not in hits:
             hits.insert(0, self.current_page)
-        # Ensure +/- 1 buffer around active viewport
+        buf = 2 if self._page_layout_mode == "two_page" else 1
         expanded: list[int] = []
         seen: set[int] = set()
         for idx in hits:
-            for cand in (idx, idx - 1, idx + 1):
+            for cand in range(idx - buf, idx + buf + 1):
                 if 0 <= cand < len(self._page_canvases) and cand not in seen:
                     seen.add(cand)
                     expanded.append(cand)
@@ -1116,7 +1319,22 @@ class PdfTabPage(QWidget):
         if self.session.page_count <= 0:
             return
         sig = (round(self.zoom, 2), self.rotation)
-        for idx in self._visible_page_indices():
+        visible = self._visible_page_indices()
+        keep_set: set[int] = set()
+        margin = 2 if self._page_layout_mode == "two_page" else 1
+        for idx in visible:
+            for cand in range(idx - margin, idx + margin + 1):
+                if 0 <= cand < len(self._page_canvases):
+                    keep_set.add(cand)
+
+        for idx, c in enumerate(self._page_canvases):
+            if idx not in keep_set:
+                if c.has_rendered_image():
+                    c.clear_rendered_image()
+                self._rendered_signatures.pop(idx, None)
+
+        gen = self._render_generation
+        for idx in visible:
             if self._rendered_signatures.get(idx) == sig:
                 continue
             cached = self.session.get_cached_page(
@@ -1137,12 +1355,31 @@ class PdfTabPage(QWidget):
                 self.zoom,
                 self.rotation,
                 draw_annots=False,
+                is_stale_fn=lambda g=gen: (not shiboken6.isValid(self)) or (g != self._render_generation),
             )
             self._active_tasks[idx] = task
             task.signals.rendered.connect(self._on_async_rendered, Qt.ConnectionType.QueuedConnection)
             task.signals.failed.connect(self._on_async_failed, Qt.ConnectionType.QueuedConnection)
             self.backdrop.set_heavy_task_active(True)
             QThreadPool.globalInstance().start(task)
+
+    def trim_memory_for_background(self) -> None:
+        """Release off-screen page pixmaps and shrink LRU cache when tab moves to background."""
+        self._render_generation += 1
+        self._scroll_render_timer.stop()
+        self._active_tasks.clear()
+        self._active_thumb_tasks.clear()
+        self._rendered_signatures.clear()
+        for c in self._page_canvases:
+            c.clear_rendered_image()
+        self.session.trim_cache(max_entries=4, max_bytes=12 * 1024 * 1024)
+
+    def restore_for_foreground(self) -> None:
+        """Restore active cache budget and re-render visible viewport pages when tab returns."""
+        self.session.set_cache_limits(max_entries=16, max_bytes=48 * 1024 * 1024)
+        self.render_visible_pages()
+        if self._thumbs_open:
+            QTimer.singleShot(0, self._render_visible_thumbnails)
 
     def render_current_page(self) -> None:
         self.render_visible_pages()
@@ -1223,8 +1460,11 @@ class PdfTabPage(QWidget):
     def apply_profile(self, profile: ThemeProfile) -> None:
         self._profile = profile
         self._mode = "light" if profile.base_mode == "light" else "dark"
-        p = get_palette(self._mode)
         self.backdrop.set_profile(profile)
+        if self._mode == self._applied_theme_mode:
+            return
+        self._applied_theme_mode = self._mode
+        p = get_palette(self._mode)
         self.toc_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
         self.thumb_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
         self.bm_add_btn.setIcon(load_svg_icon("bookmark_add", color=p["icon_color"], size=15))
@@ -1248,11 +1488,18 @@ class PdfTabPage(QWidget):
             c.apply_theme(self._mode)
 
     def cleanup(self) -> None:
+        self._render_generation += 1
         self._scroll_render_timer.stop()
+        self._thumb_scroll_timer.stop()
+        self._auto_refit_timer.stop()
+        self._active_tasks.clear()
+        self._active_thumb_tasks.clear()
         for win in (self._floating_thumb_win, self._floating_toc_win):
             if win is not None and shiboken6.isValid(win):
                 win.hide()
                 win.close()
+        for c in self._page_canvases:
+            c.cleanup()
         self.backdrop.cleanup()
         self.session.close()
 
@@ -1348,8 +1595,44 @@ class ViewerView(QWidget):
         bar_row.addWidget(self.zoom_in_btn)
 
         self.fit_btn = QPushButton("", bar_frame)
+        self.fit_btn.setObjectName("FitMenuBtn")
         self.fit_btn.setProperty("role", "GhostAction")
-        self.fit_btn.clicked.connect(self._fit_width)
+        self.fit_menu = QMenu(self.fit_btn)
+        self._fit_action_group = QActionGroup(self.fit_menu)
+        self._fit_action_group.setExclusive(True)
+        self.act_fit_width = QAction("", self.fit_menu)
+        self.act_fit_width.setCheckable(True)
+        self.act_fit_width.triggered.connect(self._fit_width)
+        self.act_fit_page = QAction("", self.fit_menu)
+        self.act_fit_page.setCheckable(True)
+        self.act_fit_page.triggered.connect(self._fit_page)
+        self.act_fit_height = QAction("", self.fit_menu)
+        self.act_fit_height.setCheckable(True)
+        self.act_fit_height.triggered.connect(self._fit_height)
+        self.act_actual_size = QAction("", self.fit_menu)
+        self.act_actual_size.setCheckable(True)
+        self.act_actual_size.triggered.connect(self._actual_size)
+        for act in (self.act_fit_width, self.act_fit_page, self.act_fit_height, self.act_actual_size):
+            self._fit_action_group.addAction(act)
+            self.fit_menu.addAction(act)
+
+        self.fit_menu.addSeparator()
+        self._layout_action_group = QActionGroup(self.fit_menu)
+        self._layout_action_group.setExclusive(True)
+        self.act_layout_continuous = QAction("", self.fit_menu)
+        self.act_layout_continuous.setCheckable(True)
+        self.act_layout_continuous.triggered.connect(lambda: self._set_page_layout_mode("continuous"))
+        self.act_layout_single = QAction("", self.fit_menu)
+        self.act_layout_single.setCheckable(True)
+        self.act_layout_single.triggered.connect(lambda: self._set_page_layout_mode("single"))
+        self.act_layout_two_page = QAction("", self.fit_menu)
+        self.act_layout_two_page.setCheckable(True)
+        self.act_layout_two_page.triggered.connect(lambda: self._set_page_layout_mode("two_page"))
+        for act in (self.act_layout_continuous, self.act_layout_single, self.act_layout_two_page):
+            self._layout_action_group.addAction(act)
+            self.fit_menu.addAction(act)
+
+        self.fit_btn.setMenu(self.fit_menu)
         bar_row.addWidget(self.fit_btn)
 
         bar_row.addWidget(self._make_v_sep(bar_frame))
@@ -1572,6 +1855,9 @@ class ViewerView(QWidget):
             ("Ctrl+=", lambda: self._step_zoom(1)),
             ("Ctrl+-", lambda: self._step_zoom(-1)),
             ("Ctrl+0", self._fit_width),
+            ("Ctrl+1", self._actual_size),
+            ("Ctrl+2", self._fit_page),
+            ("Ctrl+3", self._fit_height),
             ("Ctrl+R", self._rotate_page),
             ("Ctrl+Z", self._undo_current),
             ("Ctrl+Shift+N", self.toggle_notes_visible),
@@ -1775,12 +2061,21 @@ class ViewerView(QWidget):
             self.dict_panel.set_page_words(words)
 
     def _on_active_tab_changed(self) -> None:
+        tab = self._current_tab()
+        for idx in range(self.tabs.count()):
+            other = self.tabs.widget(idx)
+            if other is not tab and isinstance(other, PdfTabPage):
+                other.trim_memory_for_background()
+
+        if isinstance(tab, (PdfTabPage, MarkdownTabPage)) and tab._mode != self._mode:
+            tab.apply_profile(self._profile)
+
         self._sync_toolbar_state()
         self._sync_right_rail_state()
         self._sync_notes_panel()
-        tab = self._current_tab()
         if isinstance(tab, PdfTabPage):
             tab.set_notes_visible(self.toggle_notes_vis_btn.isChecked())
+            tab.restore_for_foreground()
             tab.emit_current_page_words()
             self.active_document_changed.emit(tab.pdf_path)
         elif isinstance(tab, MarkdownTabPage):
@@ -2017,6 +2312,33 @@ class ViewerView(QWidget):
         tab = self._current_tab()
         if isinstance(tab, PdfTabPage):
             tab.fit_width()
+            self._sync_toolbar_state()
+
+    def _fit_page(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.fit_page()
+            self._sync_toolbar_state()
+
+    def _fit_height(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.fit_height()
+            self._sync_toolbar_state()
+
+    def _actual_size(self) -> None:
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.set_actual_size()
+            self._sync_toolbar_state()
+
+    def _set_page_layout_mode(self, mode: str) -> None:
+        clean = mode if mode in ("continuous", "single", "two_page") else "continuous"
+        self._continuous_scroll = clean != "single"
+        tab = self._current_tab()
+        if isinstance(tab, PdfTabPage):
+            tab.set_page_layout_mode(clean)
+            self._sync_toolbar_state()
 
     def _step_page(self, delta: int) -> None:
         tab = self._current_tab()
@@ -2344,6 +2666,18 @@ class ViewerView(QWidget):
             self.present_btn.setEnabled(True)
             for b in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.prev_btn, self.next_btn, self.rotate_btn):
                 b.setEnabled(True)
+            fm = tab.fit_mode()
+            lm = tab.page_layout_mode()
+            self.act_fit_width.setChecked(fm == "fit_width")
+            self.act_fit_page.setChecked(fm == "fit_page")
+            self.act_fit_height.setChecked(fm == "fit_height")
+            self.act_actual_size.setChecked(fm == "actual_size")
+            if fm == "custom":
+                for act in (self.act_fit_width, self.act_fit_page, self.act_fit_height, self.act_actual_size):
+                    act.setChecked(False)
+            self.act_layout_continuous.setChecked(lm == "continuous")
+            self.act_layout_single.setChecked(lm == "single")
+            self.act_layout_two_page.setChecked(lm == "two_page")
         else:
             self.zoom_tag.setText("100%")
             self.page_tag.setText("MD")
@@ -2359,6 +2693,14 @@ class ViewerView(QWidget):
     def retranslate(self, lang: str) -> None:
         self._lang = lang
         self.set_show_button_labels(self._show_button_labels)
+        self.fit_btn.setToolTip(_tv("viewer.fit.menu_title", lang))
+        self.act_fit_width.setText(_tv("viewer.fit.width", lang))
+        self.act_fit_page.setText(_tv("viewer.fit.page", lang))
+        self.act_fit_height.setText(_tv("viewer.fit.height", lang))
+        self.act_actual_size.setText(_tv("viewer.fit.actual", lang))
+        self.act_layout_continuous.setText(_tv("viewer.layout.continuous", lang))
+        self.act_layout_single.setText(_tv("viewer.layout.single", lang))
+        self.act_layout_two_page.setText(_tv("viewer.layout.two_page", lang))
         self.set_fullscreen_state(self._is_fullscreen)
         self.empty_lbl.setText(_tv("viewer.empty_dual", lang))
         self.find_input.setPlaceholderText(_tv("viewer.find_placeholder", lang))
@@ -2420,10 +2762,21 @@ class ViewerView(QWidget):
             if self._floating_dict_win is not None and shiboken6.isValid(self._floating_dict_win):
                 self._floating_dict_win.apply_theme(self._mode)
 
-        for idx in range(self.tabs.count()):
-            tab = self.tabs.widget(idx)
-            if isinstance(tab, (PdfTabPage, MarkdownTabPage)):
-                tab.apply_profile(profile)
+        cur_tab = self._current_tab()
+        if isinstance(cur_tab, (PdfTabPage, MarkdownTabPage)):
+            cur_tab.apply_profile(profile)
+
+        def _sync_inactive_tabs() -> None:
+            if not shiboken6.isValid(self):
+                return
+            active = self._current_tab()
+            for i in range(self.tabs.count()):
+                other = self.tabs.widget(i)
+                if other is not active and isinstance(other, (PdfTabPage, MarkdownTabPage)):
+                    other.apply_profile(self._profile)
+
+        if self.tabs.count() > 1:
+            QTimer.singleShot(20, _sync_inactive_tabs)
 
     def cleanup(self) -> None:
         if self._presentation_win is not None and shiboken6.isValid(self._presentation_win):

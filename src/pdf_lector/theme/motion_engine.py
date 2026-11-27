@@ -10,7 +10,7 @@ from typing import Callable
 
 from PIL import Image, ImageFilter
 from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QSize, QTimer, Qt
-from PySide6.QtGui import QColor, QImage, QLinearGradient, QMovie, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QCursor, QImage, QLinearGradient, QMovie, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QApplication, QStackedWidget, QWidget
 
 from ..core.path_guard import validate_local_media_path
@@ -147,6 +147,7 @@ class MotionBackdropWidget(QWidget):
         self._render_cache_key: tuple[int, int, int, int] | None = None
         self._render_cache_pixmap: QPixmap | None = None
         self._pointer_pos: QPointF | None = None
+        self._last_polled_cursor: QPoint | None = None
         self._pointer_filter_installed = False
 
         self._timer = QTimer(self)
@@ -163,6 +164,10 @@ class MotionBackdropWidget(QWidget):
     def set_pointer_position(self, pos: QPointF | None) -> None:
         if not self.pointer_interactive:
             return
+        try:
+            self._last_polled_cursor = QCursor.pos()
+        except Exception:
+            pass
         self._pointer_pos = QPointF(pos) if pos is not None else None
         if self._surface_enabled():
             self.update()
@@ -308,9 +313,33 @@ class MotionBackdropWidget(QWidget):
         self.update()
 
     def _on_tick(self) -> None:
+        if self.pointer_interactive and self.isVisible() and self._surface_enabled():
+            try:
+                cur = QCursor.pos()
+                if self._last_polled_cursor is None:
+                    self._last_polled_cursor = cur
+                elif cur != self._last_polled_cursor:
+                    self._last_polled_cursor = cur
+                    local = self.mapFromGlobal(cur)
+                    if 0 <= local.x() <= self.width() and 0 <= local.y() <= self.height():
+                        self._pointer_pos = QPointF(local)
+                    else:
+                        self._pointer_pos = None
+            except Exception:
+                pass
         step = 0.024 if self._profile.fps_cap <= 30 else 0.014
         self._phase = (self._phase + step) % (math.tau * 100.0)
         self.update()
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self.pointer_interactive and self._surface_enabled():
+            self.set_pointer_position(event.position())
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # type: ignore[override]
+        if self.pointer_interactive and self._pointer_pos is not None:
+            self.set_pointer_position(None)
+        super().leaveEvent(event)
 
     def _sync_motion_state(self) -> None:
         state = self.guard_state()
@@ -343,40 +372,16 @@ class MotionBackdropWidget(QWidget):
                 self._timer.stop()
 
     def _sync_pointer_filter(self, enable: bool) -> None:
-        if not self.pointer_interactive:
-            return
-        app = QApplication.instance()
-        if app is None:
-            return
-        if enable and not self._pointer_filter_installed:
-            app.installEventFilter(self)
-            self._pointer_filter_installed = True
-        elif not enable and self._pointer_filter_installed:
-            app.removeEventFilter(self)
-            self._pointer_filter_installed = False
-
-    def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
-        del watched
-        if self.pointer_interactive and self.isVisible() and event.type() == QEvent.Type.MouseMove:
-            try:
-                gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else None
-                if gpos is not None:
-                    local = self.mapFromGlobal(gpos)
-                    if 0 <= local.x() <= self.width() and 0 <= local.y() <= self.height():
-                        self.set_pointer_position(QPointF(local))
-                    elif self._pointer_pos is not None:
-                        self.set_pointer_position(None)
-            except Exception:
-                pass
-        return False
+        # Global QApplication event filters cause heavy overhead during QSS repolish;
+        # pointer parallax is tracked via QCursor.pos() inside _on_tick + local mouseMoveEvent.
+        self._pointer_filter_installed = bool(enable) and False
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._sync_motion_state()
-        self._sync_pointer_filter(True)
 
     def hideEvent(self, event) -> None:
-        self._sync_pointer_filter(False)
+        self._pointer_pos = None
         if self._timer.isActive():
             self._timer.stop()
         if self._movie is not None and self._movie.state() == QMovie.MovieState.Running:
@@ -384,7 +389,7 @@ class MotionBackdropWidget(QWidget):
         super().hideEvent(event)
 
     def cleanup(self) -> None:
-        self._sync_pointer_filter(False)
+        self._pointer_filter_installed = False
         self._timer.stop()
         self._clear_movie()
         self._render_cache_pixmap = None

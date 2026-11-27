@@ -9,8 +9,9 @@ from pathlib import Path
 import time
 from typing import Callable, Sequence
 import uuid
+import weakref
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -161,6 +162,76 @@ def _point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: f
     return math.hypot(px - (x1 + proj * dx), py - (y1 + proj * dy))
 
 
+class _TabletProximityRouter(QObject):
+    """Single shared QApplication event filter routing stylus proximity to active PdfCanvas widgets."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._canvases: weakref.WeakSet[PdfCanvas] = weakref.WeakSet()
+        self._installed_app: QApplication | None = None
+        self._suspended: bool = False
+
+    def register(self, canvas: PdfCanvas, enable: bool) -> None:
+        if enable:
+            self._canvases.add(canvas)
+            app = QApplication.instance()
+            if isinstance(app, QApplication) and self._installed_app is not app and not self._suspended:
+                app.installEventFilter(self)
+                self._installed_app = app
+        else:
+            self._canvases.discard(canvas)
+            if not self._canvases and self._installed_app is not None:
+                try:
+                    self._installed_app.removeEventFilter(self)
+                except Exception:
+                    pass
+                self._installed_app = None
+
+    def set_suspended(self, suspended: bool) -> None:
+        self._suspended = bool(suspended)
+        app = QApplication.instance()
+        if self._suspended:
+            if self._installed_app is not None:
+                try:
+                    self._installed_app.removeEventFilter(self)
+                except Exception:
+                    pass
+                self._installed_app = None
+        elif self._canvases and isinstance(app, QApplication) and self._installed_app is not app:
+            app.installEventFilter(self)
+            self._installed_app = app
+
+    def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
+        del watched
+        if self._suspended or not self._canvases:
+            return False
+        etype = event.type()
+        if etype == QEvent.Type.TabletEnterProximity:
+            for c in list(self._canvases):
+                if shiboken6.isValid(c) and c.isVisible():
+                    c.set_stylus_in_proximity(True)
+        elif etype == QEvent.Type.TabletLeaveProximity:
+            for c in list(self._canvases):
+                if shiboken6.isValid(c) and c.isVisible():
+                    c.set_stylus_in_proximity(False)
+        return False
+
+
+_TABLET_PROX_ROUTER: _TabletProximityRouter | None = None
+
+
+def _get_tablet_router() -> _TabletProximityRouter:
+    global _TABLET_PROX_ROUTER
+    if _TABLET_PROX_ROUTER is None or not shiboken6.isValid(_TABLET_PROX_ROUTER):
+        _TABLET_PROX_ROUTER = _TabletProximityRouter()
+    return _TABLET_PROX_ROUTER
+
+
+def suspend_tablet_proximity_router(suspended: bool) -> None:
+    """Temporarily detach global tablet proximity filter during heavy QSS repolishes."""
+    _get_tablet_router().set_suspended(suspended)
+
+
 class PdfCanvas(QWidget):
     """Interactive PDF page sheet supporting highlights, notes, threaded comments, stylus/touch ink, and Kindle lookup."""
 
@@ -239,14 +310,6 @@ class PdfCanvas(QWidget):
         self._page_links_cache: list[PdfLink] | None = None
         self._hovered_link: PdfLink | None = None
         self._press_pos_px: QPointF | None = None
-
-        undo_sc = QShortcut(QKeySequence("Ctrl+Z"), self)
-        undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        undo_sc.activated.connect(self.undo_last_annotation)
-
-        esc_sc = QShortcut(QKeySequence("Escape"), self)
-        esc_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        esc_sc.activated.connect(self.clear_selection)
 
     @property
     def _annotations(self) -> list[AnnotationRecord]:
@@ -331,6 +394,36 @@ class PdfCanvas(QWidget):
         self._rendered_pixmap = pm if not pm.isNull() else None
         # Keep widget size strictly locked to PDF point size * zoom so scroll/highlights never shift!
         self.update()
+
+    def clear_rendered_image(self) -> None:
+        if self._rendered_pixmap is not None:
+            self._rendered_pixmap = None
+            self.update()
+
+    def has_rendered_image(self) -> bool:
+        return self._rendered_pixmap is not None and not self._rendered_pixmap.isNull()
+
+    def cleanup(self) -> None:
+        self._sync_app_tablet_filter(False)
+        self._rendered_pixmap = None
+        self._word_boxes_cache = None
+        self._page_links_cache = None
+        self._session = None
+        try:
+            self._shared_state.listeners.remove(self._on_shared_state_mutated)
+        except ValueError:
+            pass
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key.Key_Escape:
+            self.clear_selection()
+            event.accept()
+            return
+        if (event.modifiers() & Qt.KeyboardModifier.ControlModifier) and event.key() == Qt.Key.Key_Z:
+            self.undo_last_annotation()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _sync_canvas_size(self) -> None:
         w, h = self._page_size_pdf
@@ -1414,15 +1507,8 @@ class PdfCanvas(QWidget):
         return super().event(ev)
 
     def _sync_app_tablet_filter(self, enable: bool) -> None:
-        app = QApplication.instance()
-        if app is None:
-            return
-        if enable and not self._app_filter_installed:
-            app.installEventFilter(self)
-            self._app_filter_installed = True
-        elif not enable and self._app_filter_installed:
-            app.removeEventFilter(self)
-            self._app_filter_installed = False
+        self._app_filter_installed = bool(enable)
+        _get_tablet_router().register(self, bool(enable))
 
     def showEvent(self, event) -> None:  # type: ignore[override]
         super().showEvent(event)
@@ -1435,19 +1521,6 @@ class PdfCanvas(QWidget):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._sync_app_tablet_filter(False)
         super().closeEvent(event)
-
-    def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
-        del watched
-        if not shiboken6.isValid(self):
-            return False
-        etype = event.type()
-        if etype == QEvent.Type.TabletEnterProximity:
-            if self.isVisible():
-                self.set_stylus_in_proximity(True)
-        elif etype == QEvent.Type.TabletLeaveProximity:
-            if self.isVisible():
-                self.set_stylus_in_proximity(False)
-        return False
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1996,5 +2069,8 @@ class PdfCanvas(QWidget):
         self._lang = lang if lang in ("es", "en", "pt") else "es"
 
     def apply_theme(self, mode: str) -> None:
-        self._mode = "light" if mode == "light" else "dark"
+        clean = "light" if mode == "light" else "dark"
+        if clean == self._mode and self._sticky_card is None:
+            return
+        self._mode = clean
         self.update()

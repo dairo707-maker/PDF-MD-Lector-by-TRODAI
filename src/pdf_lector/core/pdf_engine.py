@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import re
 import threading
+from typing import Callable
 from urllib.parse import urlparse
 import uuid
 
@@ -79,6 +80,13 @@ class RenderSignals(QObject):
     failed = Signal(str, int, str)
 
 
+class ThumbnailSignals(QObject):
+    """Qt signals emitted from background thumbnail render tasks (connect with Qt.QueuedConnection)."""
+
+    rendered = Signal(str, int, QImage)
+    failed = Signal(str, int, str)
+
+
 class AsyncPageRenderTask(QRunnable):
     """Background worker that renders a single PDF page without freezing the UI thread."""
 
@@ -91,6 +99,7 @@ class AsyncPageRenderTask(QRunnable):
         rotation: int,
         *,
         draw_annots: bool = True,
+        is_stale_fn: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__()
         self.setAutoDelete(True)
@@ -100,17 +109,55 @@ class AsyncPageRenderTask(QRunnable):
         self.scale = scale
         self.rotation = rotation
         self.draw_annots = bool(draw_annots)
+        self._is_stale_fn = is_stale_fn
         self.signals = RenderSignals()
 
     def run(self) -> None:
         try:
+            if self._is_stale_fn is not None and self._is_stale_fn():
+                return
             img = self.session.render_page(
                 self.page_index,
                 scale=self.scale,
                 rotation=self.rotation,
                 draw_annots=self.draw_annots,
             )
+            if self._is_stale_fn is not None and self._is_stale_fn():
+                return
             self.signals.rendered.emit(self.doc_id, self.page_index, self.scale, self.rotation, img)
+        except Exception as exc:
+            self.signals.failed.emit(self.doc_id, self.page_index, str(exc))
+
+
+class AsyncThumbnailRenderTask(QRunnable):
+    """Background worker that renders a compact page thumbnail without blocking the UI thread."""
+
+    def __init__(
+        self,
+        session: PdfDocumentSession,
+        doc_id: str,
+        page_index: int,
+        *,
+        width: int = 104,
+        is_stale_fn: Callable[[], bool] | None = None,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self.session = session
+        self.doc_id = doc_id
+        self.page_index = page_index
+        self.width = max(48, int(width))
+        self._is_stale_fn = is_stale_fn
+        self.signals = ThumbnailSignals()
+
+    def run(self) -> None:
+        try:
+            if self._is_stale_fn is not None and self._is_stale_fn():
+                return
+            img = self.session.render_thumbnail(self.page_index, width=self.width)
+            if self._is_stale_fn is not None and self._is_stale_fn():
+                return
+            self.signals.rendered.emit(self.doc_id, self.page_index, img)
         except Exception as exc:
             self.signals.failed.emit(self.doc_id, self.page_index, str(exc))
 
@@ -122,8 +169,8 @@ class PdfDocumentSession:
         self,
         pdf_path: Path,
         *,
-        max_cache_entries: int = 32,
-        max_cache_bytes: int = 128 * 1024 * 1024,
+        max_cache_entries: int = 16,
+        max_cache_bytes: int = 48 * 1024 * 1024,
     ) -> None:
         import pypdfium2 as pdfium
 
@@ -131,7 +178,7 @@ class PdfDocumentSession:
         self.doc_id = uuid.uuid4().hex
         self._lock = threading.RLock()
         self._pdf_bytes: bytes = b""
-        if self.pdf_path.exists() and self.pdf_path.stat().st_size <= 128 * 1024 * 1024:
+        if self.pdf_path.exists() and self.pdf_path.stat().st_size <= 16 * 1024 * 1024:
             self._pdf_bytes = self.pdf_path.read_bytes()
             self._doc = pdfium.PdfDocument(self._pdf_bytes)
         else:
@@ -140,6 +187,7 @@ class PdfDocumentSession:
         self._max_bytes = max(1024 * 1024, int(max_cache_bytes))
         self._cache: OrderedDict[tuple[int, int, int, int], QImage] = OrderedDict()
         self._cache_bytes = 0
+        self._page_sizes_cache: dict[int, tuple[float, float]] = {}
         self._closed = False
 
     @property
@@ -235,16 +283,23 @@ class PdfDocumentSession:
 
     def render_thumbnail(self, page_index: int, *, width: int = 120) -> QImage:
         """Render a compact page thumbnail scaled to target pixel width."""
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("PdfDocumentSession is closed")
-            page = self._doc[page_index]
-            try:
-                pw, _ = page.get_size()
-            finally:
-                page.close()
+        pw, _ = self.get_page_size(page_index)
         scale = max(0.12, min(0.6, float(width) / max(100.0, float(pw))))
         return self.render_page(page_index, scale=scale, rotation=0)
+
+    def set_cache_limits(self, *, max_entries: int, max_bytes: int) -> None:
+        with self._lock:
+            self._max_entries = max(1, int(max_entries))
+            self._max_bytes = max(1024 * 1024, int(max_bytes))
+            self._evict_if_needed()
+
+    def trim_cache(self, *, max_entries: int | None = None, max_bytes: int | None = None) -> None:
+        with self._lock:
+            if max_entries is not None:
+                self._max_entries = max(1, int(max_entries))
+            if max_bytes is not None:
+                self._max_bytes = max(1024 * 1024, int(max_bytes))
+            self._evict_if_needed()
 
     def clear_cache(self) -> None:
         with self._lock:
@@ -381,10 +436,15 @@ class PdfDocumentSession:
             self._require_open()
             if page_index < 0 or page_index >= len(self._doc):
                 raise IndexError(f"Page index {page_index} out of range")
+            cached = self._page_sizes_cache.get(page_index)
+            if cached is not None:
+                return cached
             page = self._doc[page_index]
             try:
                 w, h = page.get_size()
-                return (float(w), float(h))
+                sz = (float(w), float(h))
+                self._page_sizes_cache[page_index] = sz
+                return sz
             finally:
                 page.close()
 
@@ -823,11 +883,11 @@ class PdfDocumentSession:
             self._closed = True
             self._cache.clear()
             self._cache_bytes = 0
+            self._page_sizes_cache.clear()
             try:
                 self._doc.close()
             except Exception:
                 pass
-            self._pdf_bytes = b""
             self._pdf_bytes = b""
 
 

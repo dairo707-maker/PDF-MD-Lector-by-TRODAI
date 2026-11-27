@@ -116,7 +116,6 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
     return f"""
     * {{
         border-radius: 0px;
-        font-family: "{UI_FONT_FAMILY}", "Segoe UI", sans-serif;
         outline: none;
     }}
 
@@ -310,7 +309,8 @@ def build_trodai_qss(mode: str = "dark", accent_override: str = "") -> str:
         border: 1px solid transparent;
     }}
 
-    QPushButton#TopUtilityBtn::menu-indicator {{
+    QPushButton#TopUtilityBtn::menu-indicator,
+    QPushButton#FitMenuBtn::menu-indicator {{
         image: none;
         width: 0px;
     }}

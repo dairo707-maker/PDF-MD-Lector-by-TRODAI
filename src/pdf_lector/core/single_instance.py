@@ -213,6 +213,7 @@ class SingleInstanceLock:
         import time
         from PySide6.QtCore import QCoreApplication
         from PySide6.QtNetwork import QLocalSocket
+        from .win32_bridge import allow_set_foreground_window
 
         safe_paths: list[str] = []
         for item in paths:
@@ -223,6 +224,7 @@ class SingleInstanceLock:
             if ok:
                 safe_paths.append(str(Path(raw)))
 
+        allow_set_foreground_window()
         payload = (json.dumps({"action": "activate", "paths": safe_paths}) + "\n").encode("utf-8")
         sock = QLocalSocket()
         sock.connectToServer(self.server_name)

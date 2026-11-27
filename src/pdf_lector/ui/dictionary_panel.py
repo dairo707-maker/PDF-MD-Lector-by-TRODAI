@@ -474,7 +474,6 @@ class DictionaryPanel(QFrame):
             w = item.widget()
             if w is not None:
                 w.hide()
-                w.setParent(None)
                 w.deleteLater()
 
         for word in self._page_words:
@@ -526,7 +525,6 @@ class DictionaryPanel(QFrame):
             w = item.widget()
             if w is not None:
                 w.hide()
-                w.setParent(None)
                 w.deleteLater()
         self._suggest_host.setVisible(False)
 

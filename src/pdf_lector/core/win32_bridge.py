@@ -51,6 +51,16 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
 ERROR_ACCESS_DENIED = 5
 
+# Foreground activation & ShowWindow constants
+ASFW_ANY = 0xFFFFFFFF
+SW_SHOW = 5
+SW_RESTORE = 9
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_SHOWWINDOW = 0x0040
+
 
 class _SYSTEM_POWER_STATUS(ctypes.Structure):
     _fields_ = [
@@ -267,6 +277,84 @@ def apply_trodai_window_chrome(hwnd: int, *, dark_mode: bool = True, acrylic: bo
         dwmapi.DwmSetWindowAttribute(
             hwnd_val, DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(backdrop_val), ctypes.sizeof(backdrop_val)
         )
+        return True
+    except Exception:
+        return False
+
+
+def allow_set_foreground_window(pid: int = ASFW_ANY) -> bool:
+    """Permit another process (e.g. already-running primary instance) to claim foreground focus."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+        user32.AllowSetForegroundWindow.restype = wintypes.BOOL
+        return bool(user32.AllowSetForegroundWindow(wintypes.DWORD(int(pid))))
+    except Exception:
+        return False
+
+
+def bring_window_to_foreground(hwnd: int) -> bool:
+    """Restore (if minimized) and reliably bring hwnd to the Windows 11 foreground."""
+    if not IS_WINDOWS or not hwnd:
+        return False
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        user32.IsIconic.argtypes = [wintypes.HWND]
+        user32.IsIconic.restype = wintypes.BOOL
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wintypes.BOOL
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        user32.AttachThreadInput.restype = wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        user32.BringWindowToTop.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        kernel32.GetCurrentThreadId.argtypes = []
+        kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+        target = wintypes.HWND(hwnd)
+        if user32.IsIconic(target):
+            user32.ShowWindow(target, SW_RESTORE)
+        else:
+            user32.ShowWindow(target, SW_SHOW)
+
+        fg_hwnd = user32.GetForegroundWindow()
+        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+        cur_tid = kernel32.GetCurrentThreadId()
+        attached = False
+        if fg_tid and fg_tid != cur_tid:
+            attached = bool(user32.AttachThreadInput(wintypes.DWORD(fg_tid), wintypes.DWORD(cur_tid), True))
+        try:
+            user32.BringWindowToTop(target)
+            user32.SetForegroundWindow(target)
+        finally:
+            if attached:
+                user32.AttachThreadInput(wintypes.DWORD(fg_tid), wintypes.DWORD(cur_tid), False)
+
+        if user32.GetForegroundWindow() != target:
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+            user32.SetWindowPos(target, wintypes.HWND(HWND_TOPMOST), 0, 0, 0, 0, flags)
+            user32.SetWindowPos(target, wintypes.HWND(HWND_NOTOPMOST), 0, 0, 0, 0, flags)
+            user32.BringWindowToTop(target)
+            user32.SetForegroundWindow(target)
         return True
     except Exception:
         return False

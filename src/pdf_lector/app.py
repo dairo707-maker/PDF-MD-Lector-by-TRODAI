@@ -331,11 +331,12 @@ def launch_app(argv: list[str] | None = None) -> int:
 
         if instance_lock is not None:
             def _on_forwarded_paths(paths: list[Path]) -> None:
+                import shiboken6  # noqa: PLC0415
+
                 for p in paths:
                     win.open_document_path(p, switch_to_viewer=True)
-                win.showNormal()
-                win.raise_()
-                win.activateWindow()
+                win.bring_to_front()
+                QTimer.singleShot(60, lambda: win.bring_to_front() if shiboken6.isValid(win) else None)
 
             instance_lock.start_server(_on_forwarded_paths)
 
@@ -371,6 +372,12 @@ def launch_app(argv: list[str] | None = None) -> int:
             win.show()
         else:
             splash.finish_and_close(win)
+        if args.doc_path:
+            import shiboken6  # noqa: PLC0415
+
+            win.bring_to_front()
+            if QApplication.platformName() != "offscreen":
+                QTimer.singleShot(80, lambda: win.bring_to_front() if shiboken6.isValid(win) else None)
         if QApplication.platformName() != "offscreen":
             QTimer.singleShot(1500, win.start_background_update_check)
 

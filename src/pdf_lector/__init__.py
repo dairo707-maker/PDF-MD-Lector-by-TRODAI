@@ -9,7 +9,7 @@ import threading
 APP_NAME = "PDF/MD Lector"
 COMPANY_NAME = "TRODAI"
 APP_USER_MODEL_ID = "TRODAI.PDFMDLector"
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 _VERSION_LOCK = threading.Lock()
 _VERSION_CACHE: dict[Path, tuple[int | None, str]] = {}

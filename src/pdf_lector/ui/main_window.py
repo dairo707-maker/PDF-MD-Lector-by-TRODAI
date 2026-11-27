@@ -55,11 +55,12 @@ from ..core.updater import (
     should_run_auto_check,
 )
 from ..core.usage_insights import LocalUsageInsights
-from ..core.win32_bridge import apply_trodai_window_chrome
+from ..core.win32_bridge import apply_trodai_window_chrome, bring_window_to_foreground
 from ..theme.motion_engine import MotionBackdropWidget, MotionPerformanceGuard, ViewTransitionController
 from ..theme.palette import MONO_FONT_FAMILY, UI_FONT_FAMILY, build_trodai_qss, get_palette
 from ..theme.theme_profile import ThemeProfile, save_theme_profile
 from .hub_view import HubView
+from .pdf_canvas import suspend_tablet_proximity_router
 from .preferences_dialog import UserPreferences, load_preferences
 from .svg_icons import load_multicolor_svg_pixmap, load_svg_icon, load_svg_pixmap
 from .theme_studio import ThemeStudioView
@@ -144,6 +145,12 @@ class MainWindow(QMainWindow):
         self._profile_save_timer.setSingleShot(True)
         self._profile_save_timer.setInterval(250)
         self._profile_save_timer.timeout.connect(self._flush_profile_save)
+
+        self._deferred_theme_timer = QTimer(self)
+        self._deferred_theme_timer.setSingleShot(True)
+        self._deferred_theme_timer.setInterval(16)
+        self._deferred_theme_timer.timeout.connect(self._flush_deferred_theme_sync)
+        self._pending_view_theme: set[int] = set()
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setInterval(30_000)
@@ -830,7 +837,6 @@ class MainWindow(QMainWindow):
             w = item.widget()
             if w is not None and shiboken6.isValid(w):
                 w.hide()
-                w.setParent(None)
                 w.deleteLater()
 
         ws = ToolWorkspace(
@@ -963,6 +969,7 @@ class MainWindow(QMainWindow):
         self.rec_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=13))
 
     def switch_view(self, index: int, *, immediate: bool = False) -> None:
+        self._flush_view_theme(index)
         self.transitions.switch_to(index, self._profile, immediate=immediate)
         nav_idx = index if index in (0, 1, 2) else 0
         self.nav_panel.set_current_index(nav_idx, animate=(not immediate))
@@ -1059,6 +1066,42 @@ class MainWindow(QMainWindow):
         if self._persist_profile:
             save_theme_profile(self._profile)
 
+    def bring_to_front(self) -> None:
+        """Restore if minimized and reliably raise window to the foreground."""
+        if not shiboken6.isValid(self):
+            return
+        if self.isMinimized():
+            self.showNormal()
+        elif not self.isVisible():
+            self.show()
+        self.setWindowState(
+            (self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive
+        )
+        self.raise_()
+        self.activateWindow()
+        if QApplication.platformName() != "offscreen":
+            try:
+                bring_window_to_foreground(int(self.winId()))
+            except Exception:
+                pass
+
+    def _flush_view_theme(self, view_index: int) -> None:
+        if view_index not in self._pending_view_theme or not shiboken6.isValid(self):
+            return
+        self._pending_view_theme.discard(view_index)
+        if view_index == 0:
+            self.hub_view.apply_profile(self._profile)
+        elif view_index == 1:
+            self.viewer_view.apply_profile(self._profile)
+        elif view_index == 2:
+            self.studio_view.sync_from_profile(self._profile)
+
+    def _flush_deferred_theme_sync(self) -> None:
+        if not shiboken6.isValid(self) or not self._pending_view_theme:
+            return
+        for view_index in sorted(self._pending_view_theme):
+            self._flush_view_theme(view_index)
+
     def apply_profile(self, profile: ThemeProfile, *, save: bool = True) -> None:
         self._profile = profile.sanitized(check_media_exists=False)
         p = get_palette(self._profile.base_mode)
@@ -1067,55 +1110,81 @@ class MainWindow(QMainWindow):
         if mode_changed:
             self._applied_base_mode = self._profile.base_mode
             app = QApplication.instance()
-            if isinstance(app, QApplication):
-                app.setStyleSheet(build_trodai_qss(self._profile.base_mode))
-
+            self.setUpdatesEnabled(False)
             try:
-                apply_trodai_window_chrome(
-                    int(self.winId()),
-                    dark_mode=(self._profile.base_mode == "dark"),
-                    acrylic=False,
+                if isinstance(app, QApplication):
+                    suspend_tablet_proximity_router(True)
+                    try:
+                        app.setStyleSheet(build_trodai_qss(self._profile.base_mode))
+                    finally:
+                        suspend_tablet_proximity_router(False)
+
+                try:
+                    apply_trodai_window_chrome(
+                        int(self.winId()),
+                        dark_mode=(self._profile.base_mode == "dark"),
+                        acrylic=False,
+                    )
+                except Exception:
+                    pass
+
+                self.nav_panel.apply_theme(self._profile.base_mode)
+                self.app_logo_lbl.setPixmap(load_multicolor_svg_pixmap("pdf_lector_logo", size=36))
+                sentinel_pm = load_svg_pixmap("trodai_sentinel", color=p["text_secondary"], size=18)
+                self.trodai_sentinel_lbl.setPixmap(sentinel_pm)
+                self.rib_sentinel_lbl.setPixmap(sentinel_pm)
+
+                self.sidebar_collapse_btn.setIcon(load_svg_icon("sidebar_toggle", color=p["icon_color"], size=14))
+                self.rib_expand_btn.setIcon(load_svg_icon("sidebar_toggle", color=p["icon_color"], size=15))
+                self.open_sidebar_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
+                self.rib_open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
+                for rb, icon_name in zip(self.rib_nav_btns, ("home", "viewer", "palette")):
+                    rb.setIcon(load_svg_icon(icon_name, color=p["icon_color"], size=15))
+
+                self.top_notif_btn.setIcon(load_svg_icon("bell", color=p["icon_color"], size=16))
+                self.top_settings_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=16))
+                self.top_menu_btn.setIcon(load_svg_icon("info", color=p["icon_color"], size=16))
+
+                theme_icon = "sun" if self._profile.base_mode == "dark" else "moon"
+                theme_tip = t(
+                    "topbar.toggle_light" if self._profile.base_mode == "dark" else "topbar.toggle_dark",
+                    self._profile.language,
                 )
-            except Exception:
-                pass
-
-            self.nav_panel.apply_theme(self._profile.base_mode)
-            self.app_logo_lbl.setPixmap(load_multicolor_svg_pixmap("pdf_lector_logo", size=36))
-            sentinel_pm = load_svg_pixmap("trodai_sentinel", color=p["text_secondary"], size=18)
-            self.trodai_sentinel_lbl.setPixmap(sentinel_pm)
-            self.rib_sentinel_lbl.setPixmap(sentinel_pm)
-
-            self.sidebar_collapse_btn.setIcon(load_svg_icon("sidebar_toggle", color=p["icon_color"], size=14))
-            self.rib_expand_btn.setIcon(load_svg_icon("sidebar_toggle", color=p["icon_color"], size=15))
-            self.open_sidebar_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
-            self.rib_open_btn.setIcon(load_svg_icon("open", color=p["primary_fg"], size=15))
-            for rb, icon_name in zip(self.rib_nav_btns, ("home", "viewer", "palette")):
-                rb.setIcon(load_svg_icon(icon_name, color=p["icon_color"], size=15))
-
-            self.top_notif_btn.setIcon(load_svg_icon("bell", color=p["icon_color"], size=16))
-            self.top_settings_btn.setIcon(load_svg_icon("settings", color=p["icon_color"], size=16))
-            self.top_menu_btn.setIcon(load_svg_icon("info", color=p["icon_color"], size=16))
-
-            theme_icon = "sun" if self._profile.base_mode == "dark" else "moon"
-            theme_tip = t(
-                "topbar.toggle_light" if self._profile.base_mode == "dark" else "topbar.toggle_dark",
-                self._profile.language,
-            )
-            self.top_theme_btn.setIcon(load_svg_icon(theme_icon, color=p["icon_color"], size=16))
-            self.top_theme_btn.setToolTip(theme_tip)
-            self.privacy_tag.apply_theme(self._profile.base_mode)
-            self._apply_update_banner_theme()
-            if self._ai_panel is not None and shiboken6.isValid(self._ai_panel):
-                self._ai_panel.apply_theme(self._profile.base_mode)
-            if self._active_tool_workspace is not None and shiboken6.isValid(self._active_tool_workspace):
-                self._active_tool_workspace.apply_theme(self._profile.base_mode)
+                self.top_theme_btn.setIcon(load_svg_icon(theme_icon, color=p["icon_color"], size=16))
+                self.top_theme_btn.setToolTip(theme_tip)
+                self.privacy_tag.apply_theme(self._profile.base_mode)
+                self._apply_update_banner_theme()
+                if self._ai_panel is not None and shiboken6.isValid(self._ai_panel):
+                    self._ai_panel.apply_theme(self._profile.base_mode)
+                if self._active_tool_workspace is not None and shiboken6.isValid(self._active_tool_workspace):
+                    self._active_tool_workspace.apply_theme(self._profile.base_mode)
+            finally:
+                self.setUpdatesEnabled(True)
 
         self.nav_panel.set_animations_enabled(self._profile.motion_level != "static")
         self.sidebar.set_profile(self._profile)
         self.topbar.set_profile(self._profile)
-        self.hub_view.apply_profile(self._profile)
-        self.viewer_view.apply_profile(self._profile)
-        self.studio_view.sync_from_profile(self._profile)
+
+        cur_idx = self.stack.currentIndex()
+        self._pending_view_theme.clear()
+        if cur_idx == 0:
+            self.hub_view.apply_profile(self._profile)
+        else:
+            self.hub_view.defer_profile(self._profile)
+            self._pending_view_theme.add(0)
+
+        if cur_idx == 1:
+            self.viewer_view.apply_profile(self._profile)
+        else:
+            self._pending_view_theme.add(1)
+
+        if cur_idx == 2 or not mode_changed:
+            self.studio_view.sync_from_profile(self._profile)
+        else:
+            self._pending_view_theme.add(2)
+
+        if self._pending_view_theme:
+            self._deferred_theme_timer.start()
 
         if save and self._persist_profile:
             self._profile_save_timer.start()
@@ -1251,6 +1320,8 @@ class MainWindow(QMainWindow):
             self._autosave_timer.stop()
         if self._autosave_debounce_timer.isActive():
             self._autosave_debounce_timer.stop()
+        if self._deferred_theme_timer.isActive():
+            self._deferred_theme_timer.stop()
         try:
             self.save_autosave_snapshot(clean_exit=True)
         except Exception:
