@@ -4,13 +4,13 @@
 >
 > Lee primero [`CLAUDE.md`](../CLAUDE.md) para las reglas no negociables del proyecto y comandos en OneDrive.
 
-- **Ultima actualizacion:** `2026-11-26T21:15Z`
-- **Base validada previa:** `v0.3.0` (`M8`, GitHub Release `v0.3.0`)
-- **Version entregada:** `0.4.0` (`PDF/MD Lector · by TRODAI`)
+- **Ultima actualizacion:** `2026-11-26T23:59Z`
+- **Base validada previa:** `v0.4.0` (`M9`, GitHub Release `v0.4.0`)
+- **Version entregada:** `0.4.1` (`PDF/MD Lector · by TRODAI`)
 
 ---
 
-## 1. Mapa de Hitos (M1–M9 + Pista E2E)
+## 1. Mapa de Hitos (M1–M10 + Pista E2E)
 
 | Hito | Alcance principal | Estado actual | Notas / Dependencias |
 |---|---|---|---|
@@ -24,6 +24,7 @@
 | **M7 (`v0.2.0`)** | Fixes `ToolCard.mousePressEvent` (`shiboken6.isValid`) y `DocumentRagIndex.index_pdf` (`pypdf`), compuerta hardware IA Local (`ai_hardware.py`) + API BYOK / MCP Oficial legal, diccionario morfologico + `suggest_fuzzy` + Wiktionary opt-in cacheado, notas adhesivas arrastrables con tarjeta flotante + `NotesPanel` (`/Subj`), autoguardado y recuperacion ante cierre inesperado (`autosave.py`), actualizacion directa GitHub Releases y publicacion publica `v0.2.0` | **COMPLETED** (`test_m7_v020_features`: `8 passed`; `test_tier1_features`: `189 passed`; Tiers 2–4 + smoke: `230 passed`; `build_exe.py` firmado `Valid`) | Repo publico MIT + GitHub Release `v0.2.0` |
 | **M8 (`v0.3.0`)** | Botones flotantes sin recuadros e iconos centrados (`32x32` `iconOnly="true"`, cero recortes, `FlowContainer`), TopBar/Visor depurados sin duplicados, idioma fijo desde instalador (`read_installer_language`), Wiktionary por defecto con parser wikitext `w/api.php` + fallback REST `en.wiktionary.org` + sugerencias `opensearch` + cache SQLite, busqueda en documento (`Ctrl+F`) con resaltado PDFium, impresion del sistema (`Ctrl+P` `PrintPdfDialog` con `QPrinterInfo`), Modo Presentacion (`F5` / `Ctrl+L` + compatibilidad con apuntadores inalambricos + HUD inferior ocultable), listado de atajos (`F1` `ShortcutsDialog`), movimiento reactivo al puntero exclusivo en Hero del Hub (`motion_engine.py`), release firmado `v0.3.0` | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/prototype`: `85 passed in 147.91s`; E2E `test_tier1_features` + `v0.3.0`; `FIRST_FRAME_MS=62.36`; live Wiktionary ES/EN OK; capturas `v4/` verificadas) | GitHub Release `v0.3.0` |
 | **M9 (`v0.4.0`)** | Contraste notas en modo oscuro (`QTextEdit` + `#F8FAFC`/`#111C2E` en `StickyNoteCard`), coordenadas de resaltado bloqueadas al lienzo durante scroll (`set_rendered_image` sin `setFixedSize` + `_effective_scale()`), herramienta `Resaltado libre` (`free_highlight` ISO 32000 `/Ink` `/CA` + `Multiply`), zoom ampliado `10% - 1200%` (con tope raster `4096px` y cache `128 MB`), notas visibles en pagina con puntos de redimensionado (`resize_sticky_note`) y linea guia sutil (`/TRODAIAnchor`), toggle ocultar/mostrar notas (`Ctrl+Shift+N` + ojo en barra y `NotesPanel`), compartir PDF como adjunto (`share_service.py`: `MAPISendMailW` + `CF_HDROP` + WhatsApp/Telegram/Teams + `ShareDocumentDialog`) | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/m9/prototype`: `90 passed in 157.87s`; `SVG_CHECK: OK 70 icons`; `EMOJI_CHECK: OK`; `FIRST_FRAME_MS=46.70`; capturas `v5/` verificadas) | GitHub Release `v0.4.0` |
+| **M10 (`v0.4.1`)** | Notas adhesivas ISO 32000 nativas `/FreeTextCallout` (`/IT /FreeTextCallout`, `/CL`, `/RD`, `/AP /N` con linea guia, encabezado y texto visible en Acrobat/Edge/Chrome + roundtrip sin perdidas), hipervinculos PDF (`/Link` externo `http`/`https`/`mailto` e interno `/GoTo` + autodetectados WebLinks con filtro de seguridad `is_safe_pdf_uri`), cursor `IBeamCursor` cerca de texto seleccionable, preservacion de posicion exacta de lectura en Zoom In/Out (`set_zoom`), cinta de anotaciones solo iconos poligonales (`cursor.svg`, `free_highlight.svg`, `touch.svg`) con muestras de color centradas verticalmente, actualizador directo en 1 clic oculto al estar al dia (`Actualizar y reiniciar ahora` + fix `launch_detached_update`), y notas de release renderizadas en HTML (`QTextBrowser` seguro) | **COMPLETED** (`test_m1/m3/m4/m5_*/m6/m7/m8/m9/m10/prototype`: `95 passed in 270.12s`; `STATIC_CHECKS_OK svgs=73`; capturas `v6/` verificadas; build firmado `Valid`) | GitHub Release `v0.4.1` |
 
 ---
 
@@ -163,5 +164,17 @@ Si tomas el relevo tras una interrupcion o limite de cuota:
     - `tests/e2e/test_fixtures_smoke.py tests/e2e/test_tier2_boundaries.py tests/e2e/test_tier3_pairwise.py tests/e2e/test_tier4_workloads.py`: `230 passed in 423.61s`
     - Checks estaticos (`capture_v3.py`): `STATIC_CHECKS_OK: all SVGs 100% polygonal, 0 Unicode emojis.`, `FIRST_FRAME_MS=36.33`
     - Compilacion + firma local (`$env:PDF_LECTOR_SIGN_LOCAL="1"; uv run --no-sync python scripts/build_exe.py`): `PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `689bb6991f91efd730827611f26cff36c079abf3e7dff9aecbe7f9dcada6cc01`), `PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `84f0869d4ab3ca480148816cdcf88647325db8d2656aca75fc58a631a96af4df`).
+- **2026-11-26 19:00 (-05) — Hito M10 (`v0.4.1`) -> `COMPLETED`:**
+  - **Archivos creados:** `assets/icons/{cursor,free_highlight,touch}.svg`, `tests/test_m10_v041_features.py`.
+  - **Archivos actualizados:** `VERSION` (`0.4.1`), `pyproject.toml`, `packaging/installer.iss`, `src/pdf_lector/__init__.py`, `src/pdf_lector/api/schemas.py`, `src/pdf_lector/core/{pdf_annotations,pdf_engine,updater}.py`, `src/pdf_lector/ui/{pdf_canvas,viewer_view,about_updater_dialog}.py`, `CHANGELOG.md`, `docs/HANDOFF_STATUS.md`, `tests/{test_m1_foundation_security,test_m4_ui_updater,test_m5_packaging_docs}.py`, `tests/e2e/test_tier1_features.py`.
+  - **Resultados exactos de verificacion:**
+    - `tests/test_m10_v041_features.py`: `5 passed in 12.84s` (exit `0`).
+    - Suite completa (`python -m pytest` sobre 11 modulos `test_m1`, `test_m3`, `test_m4`, `test_m5_*`, `test_m6`..`test_m10`, `test_prototype_theme_motion_splash`): `95 passed in 270.12s (0:04:30)` (exit `0`).
+    - Checks estaticos: `STATIC_CHECKS_OK svgs=73` (100 % poligonales, 0 emojis Unicode); capturas `v6/` verificadas (incluyendo render puro PDFium del `/FreeTextCallout`).
+    - Compilacion + firma local (`$env:PDF_LECTOR_SIGN_LOCAL="1"; uv run --no-sync python scripts/build_exe.py`):
+      - `PDF-MD-Lector.exe` (`Valid`)
+      - `PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `d2055992090d05a104c26b46efa905e0dbfa953d11a34465a6a37abdd3ab560d`)
+      - `PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `9ad831de234b104cc7b8acc41ccd2f0c4ac4bc9e97dd175f4c452195103c6889`)
+
 
 

@@ -10,10 +10,11 @@ import time
 from typing import Callable, Sequence
 import uuid
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
+    QDesktopServices,
     QFont,
     QKeySequence,
     QPainter,
@@ -53,7 +54,7 @@ from ..core.pdf_annotations import (
     sanitize_color_hex,
     sanitize_note_category,
 )
-from ..core.pdf_engine import PdfDocumentSession
+from ..core.pdf_engine import PdfDocumentSession, PdfLink, WordBox, is_safe_pdf_uri
 from ..theme.palette import MONO_FONT_FAMILY, UI_FONT_FAMILY, get_palette
 from .svg_icons import load_svg_icon
 from .widgets import AdaptiveButton
@@ -73,6 +74,7 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
         "canvas.undo": "Deshacer",
         "canvas.note_prompt": "Texto de la nota adhesiva:",
         "canvas.reply_prompt": "Comentario o respuesta:",
+        "canvas.link_page": "Ir a pagina {page}",
         "note.card_title": "Nota adhesiva",
         "note.category": "Categoria",
         "note.close": "Cerrar tarjeta",
@@ -91,6 +93,7 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
         "canvas.undo": "Undo",
         "canvas.note_prompt": "Sticky note content:",
         "canvas.reply_prompt": "Comment or reply:",
+        "canvas.link_page": "Go to page {page}",
         "note.card_title": "Sticky note",
         "note.category": "Category",
         "note.close": "Close card",
@@ -109,6 +112,7 @@ _LOCAL_CANVAS_TEXTS: dict[str, dict[str, str]] = {
         "canvas.undo": "Desfazer",
         "canvas.note_prompt": "Texto da nota adesiva:",
         "canvas.reply_prompt": "Comentario ou resposta:",
+        "canvas.link_page": "Ir para pagina {page}",
         "note.card_title": "Nota adesiva",
         "note.category": "Categoria",
         "note.close": "Fechar cartao",
@@ -167,6 +171,8 @@ class PdfCanvas(QWidget):
     zoom_delta_requested = Signal(float)
     pan_delta_requested = Signal(float, float)
     annotation_selected = Signal(object)
+    link_page_requested = Signal(int)
+    link_uri_requested = Signal(str)
 
     def __init__(
         self,
@@ -229,6 +235,10 @@ class PdfCanvas(QWidget):
         self._hovered_note_id: str | None = None
         self._sticky_card: QFrame | None = None
         self._sticky_card_note_id: str | None = None
+        self._word_boxes_cache: list[WordBox] | None = None
+        self._page_links_cache: list[PdfLink] | None = None
+        self._hovered_link: PdfLink | None = None
+        self._press_pos_px: QPointF | None = None
 
         undo_sc = QShortcut(QKeySequence("Ctrl+Z"), self)
         undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -270,6 +280,10 @@ class PdfCanvas(QWidget):
         self._selection_quads_pdf.clear()
         self._selected_text = ""
         self._selected_word = ""
+        self._word_boxes_cache = None
+        self._page_links_cache = None
+        self._hovered_link = None
+        self._press_pos_px = None
         self._hide_popover()
         self.update()
 
@@ -298,6 +312,10 @@ class PdfCanvas(QWidget):
         self._selection_quads_pdf.clear()
         self._selected_text = ""
         self._selected_word = ""
+        self._word_boxes_cache = None
+        self._page_links_cache = None
+        self._hovered_link = None
+        self._press_pos_px = None
         self._hide_popover()
         self._sync_canvas_size()
         self.update()
@@ -835,6 +853,69 @@ class PdfCanvas(QWidget):
         elif phase == "end":
             self._prev_pan_point = None
         return "pan"
+
+    def _get_word_boxes(self) -> list[WordBox]:
+        if self._word_boxes_cache is None:
+            if self._session is not None and 0 <= self._page_index < self._session.page_count:
+                try:
+                    self._word_boxes_cache = list(self._session.get_page_word_boxes(self._page_index))
+                except Exception:
+                    self._word_boxes_cache = []
+            else:
+                self._word_boxes_cache = []
+        return self._word_boxes_cache
+
+    def _is_near_text(self, x_pdf: float, y_pdf: float) -> bool:
+        boxes = self._get_word_boxes()
+        if not boxes:
+            return False
+        tol = max(3.0, min(10.0, 6.0 / max(0.25, self._effective_scale())))
+        for wb in boxes:
+            x0, y0, x1, y1 = wb.rect_pdf
+            if (x0 - tol) <= x_pdf <= (x1 + tol) and (y0 - tol) <= y_pdf <= (y1 + tol):
+                return True
+        return False
+
+    def _get_page_links(self) -> list[PdfLink]:
+        if self._page_links_cache is None:
+            if self._session is not None and 0 <= self._page_index < self._session.page_count:
+                try:
+                    self._page_links_cache = list(self._session.get_page_links(self._page_index))
+                except Exception:
+                    self._page_links_cache = []
+            else:
+                self._page_links_cache = []
+        return self._page_links_cache
+
+    def _link_at(self, x_pdf: float, y_pdf: float) -> PdfLink | None:
+        tol = 2.0
+        for lnk in self._get_page_links():
+            x0, y0, x1, y1 = lnk.rect_pdf
+            if (x0 - tol) <= x_pdf <= (x1 + tol) and (y0 - tol) <= y_pdf <= (y1 + tol):
+                return lnk
+        return None
+
+    def _set_link_hover_tooltip(self, link: PdfLink | None) -> None:
+        if link == self._hovered_link:
+            return
+        self._hovered_link = link
+        if link is None:
+            self.setToolTip("")
+        elif link.uri:
+            self.setToolTip(link.uri)
+        elif link.target_page is not None:
+            self.setToolTip(_tc("canvas.link_page", self._lang).format(page=int(link.target_page) + 1))
+
+    def _activate_link(self, link: PdfLink) -> bool:
+        if link.target_page is not None:
+            self.link_page_requested.emit(int(link.target_page))
+            return True
+        if link.uri and is_safe_pdf_uri(link.uri):
+            self.link_uri_requested.emit(link.uri)
+            if QApplication.platformName() != "offscreen":
+                QDesktopServices.openUrl(QUrl(link.uri))
+            return True
+        return False
 
     def _annotation_at(
         self,
@@ -1413,6 +1494,7 @@ class PdfCanvas(QWidget):
                 return
 
             self.hide_sticky_card()
+            self._press_pos_px = QPointF(pos)
             self._drag_start_pdf = (x_pdf, y_pdf)
             self._selection_quads_pdf.clear()
             self._selected_text = ""
@@ -1494,6 +1576,7 @@ class PdfCanvas(QWidget):
             if r_hit is not None:
                 nid, handle = r_hit
                 self._hovered_note_id = nid
+                self._set_link_hover_tooltip(None)
                 cursor_map = {
                     "nw": Qt.CursorShape.SizeFDiagCursor,
                     "se": Qt.CursorShape.SizeFDiagCursor,
@@ -1509,12 +1592,26 @@ class PdfCanvas(QWidget):
                 hit = self._annotation_at(x_pdf, y_pdf, radius_pdf=6.0) if self._notes_visible else None
                 if hit is not None and hit[1].kind == "text":
                     self._hovered_note_id = hit[1].id
+                    self._set_link_hover_tooltip(None)
                     self.setCursor(Qt.CursorShape.PointingHandCursor)
                 else:
                     if self._hovered_note_id is not None:
                         self._hovered_note_id = None
                         self.update()
-                    self.setCursor(Qt.CursorShape.ArrowCursor)
+                    if self._tool_mode == "select":
+                        link = self._link_at(x_pdf, y_pdf)
+                        if link is not None:
+                            self._set_link_hover_tooltip(link)
+                            self.setCursor(Qt.CursorShape.PointingHandCursor)
+                        elif self._is_near_text(x_pdf, y_pdf):
+                            self._set_link_hover_tooltip(None)
+                            self.setCursor(Qt.CursorShape.IBeamCursor)
+                        else:
+                            self._set_link_hover_tooltip(None)
+                            self.setCursor(Qt.CursorShape.ArrowCursor)
+                    else:
+                        self._set_link_hover_tooltip(None)
+                        self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
@@ -1552,7 +1649,23 @@ class PdfCanvas(QWidget):
                 sx0, sy0 = self._drag_start_pdf
                 self._drag_start_pdf = None
                 pos = event.position()
+                drag_px = (
+                    math.hypot(pos.x() - self._press_pos_px.x(), pos.y() - self._press_pos_px.y())
+                    if self._press_pos_px is not None
+                    else 0.0
+                )
+                self._press_pos_px = None
                 ex_pdf, ey_pdf = self._screen_to_pdf(pos.x(), pos.y())
+                if (
+                    self._tool_mode == "select"
+                    and drag_px < 4.5
+                    and not self._selected_word
+                    and not self._selection_quads_pdf
+                ):
+                    link = self._link_at(ex_pdf, ey_pdf)
+                    if link is not None and self._activate_link(link):
+                        event.accept()
+                        return
                 if self._tool_mode == "highlight":
                     if self._selection_quads_pdf:
                         for qrect in self._selection_quads_pdf:

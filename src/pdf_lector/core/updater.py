@@ -411,7 +411,7 @@ def build_detached_update_script(
         "  timeout /t 1 /nobreak >nul",
         "  goto wait_loop",
         ")",
-        f'"{inst}" /SILENT /NORESTART',
+        f'"{inst}" /SILENT /NORESTART /CLOSEAPPLICATIONS',
     ]
     if relaunch_exe is not None:
         lines.append(f'start "" "{Path(relaunch_exe)}"')

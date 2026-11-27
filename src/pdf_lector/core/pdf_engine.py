@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import ctypes
 from dataclasses import dataclass
 import math
 from pathlib import Path
 import re
 import threading
+from urllib.parse import urlparse
 import uuid
 
 from PySide6.QtCore import QObject, QRunnable, Signal
@@ -41,6 +43,33 @@ class SearchHit:
     page_index: int
     rect_pdf: tuple[float, float, float, float]
     snippet: str = ""
+
+
+@dataclass(frozen=True)
+class PdfLink:
+    """Clickable PDF hyperlink (external URI or internal page destination)."""
+
+    page_index: int
+    rect_pdf: tuple[float, float, float, float]
+    uri: str = ""
+    target_page: int | None = None
+
+
+def is_safe_pdf_uri(uri: str) -> bool:
+    """Allow only safe external link schemes (http, https, mailto); reject script/file/UNC URIs."""
+    clean = (uri or "").strip()
+    if not clean or clean.startswith(("/", "\\")):
+        return False
+    try:
+        parsed = urlparse(clean)
+    except Exception:
+        return False
+    scheme = (parsed.scheme or "").lower()
+    if scheme in ("http", "https"):
+        return bool(parsed.netloc)
+    if scheme == "mailto":
+        return bool(parsed.path)
+    return False
 
 
 class RenderSignals(QObject):
@@ -455,6 +484,130 @@ class PdfDocumentSession:
             tol_matches.sort(key=lambda item: item[0])
             return tol_matches[0][1]
         return None
+
+    def get_page_links(self, page_index: int) -> list[PdfLink]:
+        """Extract explicit /Link annotations and detected web URLs for a PDF page."""
+        import pypdfium2.raw as pdfium_c
+
+        with self._lock:
+            self._require_open()
+            if page_index < 0 or page_index >= len(self._doc):
+                return []
+            page_total = len(self._doc)
+            page = self._doc[page_index]
+            tp = None
+            weblinks = None
+            links: list[PdfLink] = []
+            try:
+                # A. Explicit /Link annotations (URI + internal /GoTo destinations)
+                start_pos = ctypes.c_int(0)
+                link_annot = pdfium_c.FPDF_LINK()
+                rect_c = pdfium_c.FS_RECTF()
+                while pdfium_c.FPDFLink_Enumerate(page.raw, ctypes.byref(start_pos), ctypes.byref(link_annot)):
+                    if not pdfium_c.FPDFLink_GetAnnotRect(link_annot, ctypes.byref(rect_c)):
+                        continue
+                    norm_rect = (
+                        min(float(rect_c.left), float(rect_c.right)),
+                        min(float(rect_c.bottom), float(rect_c.top)),
+                        max(float(rect_c.left), float(rect_c.right)),
+                        max(float(rect_c.bottom), float(rect_c.top)),
+                    )
+                    uri_val = ""
+                    target_pg: int | None = None
+                    action = pdfium_c.FPDFLink_GetAction(link_annot)
+                    if action:
+                        atype = int(pdfium_c.FPDFAction_GetType(action))
+                        if atype == getattr(pdfium_c, "PDFACTION_URI", 3):
+                            needed = int(pdfium_c.FPDFAction_GetURIPath(self._doc.raw, action, None, 0))
+                            if needed > 0:
+                                buf = ctypes.create_string_buffer(needed)
+                                pdfium_c.FPDFAction_GetURIPath(self._doc.raw, action, buf, needed)
+                                raw_uri = bytes(buf).split(b"\x00", 1)[0].decode("utf-8", errors="ignore").strip()
+                                if is_safe_pdf_uri(raw_uri):
+                                    uri_val = raw_uri
+                        elif atype == getattr(pdfium_c, "PDFACTION_GOTO", 1):
+                            dest = pdfium_c.FPDFAction_GetDest(self._doc.raw, action)
+                            if dest:
+                                idx = int(pdfium_c.FPDFDest_GetDestPageIndex(self._doc.raw, dest))
+                                if 0 <= idx < page_total:
+                                    target_pg = idx
+                    if not uri_val and target_pg is None:
+                        dest = pdfium_c.FPDFLink_GetDest(self._doc.raw, link_annot)
+                        if dest:
+                            idx = int(pdfium_c.FPDFDest_GetDestPageIndex(self._doc.raw, dest))
+                            if 0 <= idx < page_total:
+                                target_pg = idx
+                    if uri_val or target_pg is not None:
+                        links.append(
+                            PdfLink(
+                                page_index=page_index,
+                                rect_pdf=norm_rect,
+                                uri=uri_val,
+                                target_page=target_pg,
+                            )
+                        )
+
+                # B. Auto-detected plain-text web URLs via PDFium WebLinks
+                tp = page.get_textpage()
+                weblinks = pdfium_c.FPDFLink_LoadWebLinks(tp.raw)
+                if weblinks:
+                    wl_count = int(pdfium_c.FPDFLink_CountWebLinks(weblinks))
+                    for w_idx in range(wl_count):
+                        u_len = int(pdfium_c.FPDFLink_GetURL(weblinks, w_idx, None, 0))
+                        if u_len <= 0:
+                            continue
+                        u_buf = (ctypes.c_ushort * u_len)()
+                        pdfium_c.FPDFLink_GetURL(weblinks, w_idx, u_buf, u_len)
+                        raw_url = bytes(u_buf).decode("utf-16-le", errors="ignore").rstrip("\x00").strip()
+                        if raw_url.lower().startswith("www."):
+                            raw_url = f"https://{raw_url}"
+                        if not is_safe_pdf_uri(raw_url):
+                            continue
+                        r_count = int(pdfium_c.FPDFLink_CountRects(weblinks, w_idx))
+                        for r_idx in range(r_count):
+                            l = ctypes.c_double()
+                            t = ctypes.c_double()
+                            r = ctypes.c_double()
+                            b = ctypes.c_double()
+                            if pdfium_c.FPDFLink_GetRect(
+                                weblinks, w_idx, r_idx, ctypes.byref(l), ctypes.byref(t), ctypes.byref(r), ctypes.byref(b)
+                            ):
+                                cand_rect = (
+                                    min(float(l.value), float(r.value)),
+                                    min(float(b.value), float(t.value)),
+                                    max(float(l.value), float(r.value)),
+                                    max(float(b.value), float(t.value)),
+                                )
+                                dup = any(
+                                    ex.uri == raw_url
+                                    and abs(ex.rect_pdf[0] - cand_rect[0]) < 3.0
+                                    and abs(ex.rect_pdf[1] - cand_rect[1]) < 3.0
+                                    for ex in links
+                                )
+                                if not dup:
+                                    links.append(
+                                        PdfLink(
+                                            page_index=page_index,
+                                            rect_pdf=cand_rect,
+                                            uri=raw_url,
+                                            target_page=None,
+                                        )
+                                    )
+            except Exception:
+                pass
+            finally:
+                if weblinks is not None:
+                    try:
+                        pdfium_c.FPDFLink_CloseWebLinks(weblinks)
+                    except Exception:
+                        pass
+                if tp is not None:
+                    try:
+                        tp.close()
+                    except Exception:
+                        pass
+                page.close()
+            return links
 
     def select_text_in_rect(
         self,

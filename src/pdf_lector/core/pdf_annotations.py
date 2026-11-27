@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import math
 import os
 from pathlib import Path
 import re
 import shutil
 import tempfile
+import textwrap
 from typing import Literal, Sequence
 import uuid
 
@@ -182,6 +184,177 @@ def _write_backup_atomic(src_path: Path) -> Path:
     return bak_path
 
 
+def _is_visible_sticky_callout(rec: AnnotationRecord, rect: tuple[float, float, float, float]) -> bool:
+    return rec.kind == "text" and (rect[2] - rect[0]) >= 48.0 and (rect[3] - rect[1]) >= 30.0
+
+
+def _escape_pdf_winansi(text: str) -> str:
+    clean = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return clean.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _nearest_box_edge_point(box: tuple[float, float, float, float], ax: float, ay: float) -> tuple[float, float]:
+    bx0, by0, bx1, by1 = box
+    return (max(bx0, min(bx1, ax)), max(by0, min(by1, ay)))
+
+
+def _build_callout_geometry(
+    box_rect: tuple[float, float, float, float],
+    anchor_pdf: tuple[float, float] | None,
+) -> tuple[tuple[float, float, float, float], list[float], list[float] | None, tuple[float, float] | None, bool]:
+    bx0, by0, bx1, by1 = box_rect
+    if anchor_pdf is not None and len(anchor_pdf) >= 2:
+        ax, ay = float(anchor_pdf[0]), float(anchor_pdf[1])
+        is_outside = not ((bx0 - 2.0) <= ax <= (bx1 + 2.0) and (by0 - 2.0) <= ay <= (by1 + 2.0))
+        if is_outside:
+            ex, ey = _nearest_box_edge_point(box_rect, ax, ay)
+            if abs(ax - ex) >= abs(ay - ey):
+                dx = ax - ex
+                stub = min(10.0, abs(dx) * 0.4)
+                kx = ex + (stub if dx > 0.0 else -stub)
+                ky = ey
+            else:
+                dy = ay - ey
+                stub = min(10.0, abs(dy) * 0.4)
+                kx = ex
+                ky = ey + (stub if dy > 0.0 else -stub)
+            outer_rect = (
+                min(bx0, ax - 5.0),
+                min(by0, ay - 5.0),
+                max(bx1, ax + 5.0),
+                max(by1, ay + 5.0),
+            )
+            rd = [
+                round(bx0 - outer_rect[0], 3),
+                round(by0 - outer_rect[1], 3),
+                round(outer_rect[2] - bx1, 3),
+                round(outer_rect[3] - by1, 3),
+            ]
+            cl = [
+                round(ax, 3),
+                round(ay, 3),
+                round(kx, 3),
+                round(ky, 3),
+                round(ex, 3),
+                round(ey, 3),
+            ]
+            return (outer_rect, rd, cl, (ex, ey), True)
+    return (box_rect, [0.0, 0.0, 0.0, 0.0], None, None, False)
+
+
+def _wrap_callout_lines(content: str, box_w: float) -> list[str]:
+    cols = max(10, int((box_w - 10.0) / 4.6))
+    lines: list[str] = []
+    raw_paragraphs = (content or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for para in raw_paragraphs:
+        stripped = para.strip()
+        if not stripped:
+            lines.append("")
+            continue
+        lines.extend(textwrap.wrap(stripped, width=cols, break_long_words=True, break_on_hyphens=True))
+    return lines or [""]
+
+
+def _build_callout_ap_stream(
+    pdf,
+    pikepdf,
+    outer_rect: tuple[float, float, float, float],
+    box_rect: tuple[float, float, float, float],
+    rgb: tuple[float, float, float],
+    rec: AnnotationRecord,
+    anchor_pdf: tuple[float, float] | None,
+    edge_pt: tuple[float, float] | None,
+):
+    rx0, ry0, rx1, ry1 = outer_rect
+    ow = max(12.0, rx1 - rx0)
+    oh = max(12.0, ry1 - ry0)
+    bx0, by0, bx1, by1 = box_rect
+    lx0 = bx0 - rx0
+    ly0 = by0 - ry0
+    bw = max(12.0, bx1 - bx0)
+    bh = max(12.0, by1 - by0)
+    r, g, b = rgb
+
+    cmds: list[str] = ["q"]
+    if anchor_pdf is not None and edge_pt is not None and len(anchor_pdf) >= 2:
+        lax, lay = float(anchor_pdf[0]) - rx0, float(anchor_pdf[1]) - ry0
+        lex, ley = float(edge_pt[0]) - rx0, float(edge_pt[1]) - ry0
+        cmds.append(
+            f"[3 2] 0 d 0.420 0.480 0.560 RG 1 w {lex:.2f} {ley:.2f} m {lax:.2f} {lay:.2f} l S"
+        )
+        cmds.append(
+            f"[] 0 d {r:.3f} {g:.3f} {b:.3f} rg 0.120 0.160 0.230 RG 0.8 w "
+            f"{lax - 2.0:.2f} {lay - 2.0:.2f} 4.00 4.00 re B"
+        )
+
+    pr = min(1.0, 0.80 + 0.20 * r)
+    pg = min(1.0, 0.80 + 0.20 * g)
+    pb = min(1.0, 0.80 + 0.20 * b)
+    cmds.append(
+        f"{pr:.3f} {pg:.3f} {pb:.3f} rg 0.200 0.250 0.330 RG 1 w "
+        f"{lx0:.2f} {ly0:.2f} {bw:.2f} {bh:.2f} re B"
+    )
+
+    hdr_h = min(15.0, max(10.0, bh * 0.26))
+    hdr_y = ly0 + bh - hdr_h
+    cmds.append(f"{r:.3f} {g:.3f} {b:.3f} rg {lx0:.2f} {hdr_y:.2f} {bw:.2f} {hdr_h:.2f} re f")
+    cmds.append(
+        f"0.200 0.250 0.330 RG 0.6 w {lx0:.2f} {hdr_y:.2f} m {lx0 + bw:.2f} {hdr_y:.2f} l S"
+    )
+
+    cat_lbl = _escape_pdf_winansi(sanitize_note_category(getattr(rec, "category", "General")))
+    cat_y = hdr_y + max(2.2, (hdr_h - 7.5) * 0.35)
+    cmds.append(
+        f"BT /HelvB 7.5 Tf 0.060 0.090 0.160 rg {lx0 + 4.5:.2f} {cat_y:.2f} Td ({cat_lbl}) Tj ET"
+    )
+
+    lines = _wrap_callout_lines(rec.content or "", bw)
+    leading = 10.2
+    cur_y = hdr_y - 10.5
+    for ln in lines:
+        if cur_y < ly0 + 3.0:
+            break
+        safe_ln = _escape_pdf_winansi(ln)
+        if safe_ln:
+            cmds.append(
+                f"BT /Helv 8.5 Tf 0.060 0.090 0.160 rg {lx0 + 4.5:.2f} {cur_y:.2f} Td ({safe_ln}) Tj ET"
+            )
+        cur_y -= leading
+
+    cmds.append("Q\n")
+    data = "\n".join(cmds).encode("cp1252", errors="replace")
+    ap = pikepdf.Stream(pdf, data)
+    ap["/Type"] = pikepdf.Name("/XObject")
+    ap["/Subtype"] = pikepdf.Name("/Form")
+    ap["/BBox"] = pikepdf.Array([0.0, 0.0, round(ow, 3), round(oh, 3)])
+    ap["/Matrix"] = pikepdf.Array([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+    ap["/Resources"] = pikepdf.Dictionary(
+        {
+            "/Font": pikepdf.Dictionary(
+                {
+                    "/Helv": pikepdf.Dictionary(
+                        {
+                            "/Type": pikepdf.Name("/Font"),
+                            "/Subtype": pikepdf.Name("/Type1"),
+                            "/BaseFont": pikepdf.Name("/Helvetica"),
+                            "/Encoding": pikepdf.Name("/WinAnsiEncoding"),
+                        }
+                    ),
+                    "/HelvB": pikepdf.Dictionary(
+                        {
+                            "/Type": pikepdf.Name("/Font"),
+                            "/Subtype": pikepdf.Name("/Type1"),
+                            "/BaseFont": pikepdf.Name("/Helvetica-Bold"),
+                            "/Encoding": pikepdf.Name("/WinAnsiEncoding"),
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    return pdf.make_indirect(ap)
+
+
 def _build_ap_stream(
     pdf,
     pikepdf,
@@ -352,6 +525,34 @@ def load_pdf_annotations(pdf_path: Path | str) -> list[AnnotationRecord]:
                 rect_raw = annot.get("/Rect")
                 rect_pdf = _norm_rect([float(v) for v in rect_raw]) if rect_raw else (0.0, 0.0, 0.0, 0.0)
 
+                is_sticky_callout = kind == "freetext" and (
+                    str(annot.get("/TRODAINoteKind", "")) == "/StickyCallout"
+                    or str(annot.get("/IT", "")) == "/FreeTextCallout"
+                )
+                if is_sticky_callout:
+                    kind = "text"
+                    if "/TRODAIBoxRect" in annot:
+                        try:
+                            box_arr = [float(v) for v in annot["/TRODAIBoxRect"]]
+                            if len(box_arr) >= 4:
+                                rect_pdf = _norm_rect(box_arr)
+                        except Exception:
+                            pass
+                    elif "/RD" in annot:
+                        try:
+                            rd_arr = [float(v) for v in annot["/RD"]]
+                            if len(rd_arr) >= 4:
+                                cand = (
+                                    rect_pdf[0] + max(0.0, rd_arr[0]),
+                                    rect_pdf[1] + max(0.0, rd_arr[1]),
+                                    rect_pdf[2] - max(0.0, rd_arr[2]),
+                                    rect_pdf[3] - max(0.0, rd_arr[3]),
+                                )
+                                if cand[2] > cand[0] + 12.0 and cand[3] > cand[1] + 12.0:
+                                    rect_pdf = _norm_rect(cand)
+                        except Exception:
+                            pass
+
                 points_pdf: list[list[tuple[float, float]]] = []
                 if kind == "ink" and "/InkList" in annot:
                     for stroke in annot["/InkList"]:
@@ -395,6 +596,13 @@ def load_pdf_annotations(pdf_path: Path | str) -> list[AnnotationRecord]:
                         arr = annot["/TRODAIAnchor"]
                         if len(arr) >= 2:
                             anchor_pdf = (float(arr[0]), float(arr[1]))
+                    except Exception:
+                        anchor_pdf = None
+                elif is_sticky_callout and "/CL" in annot:
+                    try:
+                        cl_arr = [float(v) for v in annot["/CL"]]
+                        if len(cl_arr) >= 2:
+                            anchor_pdf = (cl_arr[0], cl_arr[1])
                     except Exception:
                         anchor_pdf = None
 
@@ -510,19 +718,27 @@ def save_pdf_annotations(
                     pdf_date = iso_to_pdf_date(rec.timestamp_iso)
                     annot_id = (rec.id or "").strip() or f"{rec.kind}-{uuid.uuid4().hex[:8]}"
 
-                    subtype_name = {
-                        "highlight": "/Highlight",
-                        "text": "/Text",
-                        "ink": "/Ink",
-                        "freetext": "/FreeText",
-                        "popup": "/Popup",
-                    }[rec.kind]
+                    is_callout = _is_visible_sticky_callout(rec, rect)
+                    if is_callout:
+                        anchor = getattr(rec, "anchor_pdf", None)
+                        outer_rect, rd, cl, edge_pt, has_callout = _build_callout_geometry(rect, anchor)
+                        ap_rect = outer_rect
+                        subtype_name = "/FreeText"
+                    else:
+                        ap_rect = rect
+                        subtype_name = {
+                            "highlight": "/Highlight",
+                            "text": "/Text",
+                            "ink": "/Ink",
+                            "freetext": "/FreeText",
+                            "popup": "/Popup",
+                        }[rec.kind]
 
                     d = pikepdf.Dictionary(
                         {
                             "/Type": pikepdf.Name("/Annot"),
                             "/Subtype": pikepdf.Name(subtype_name),
-                            "/Rect": pikepdf.Array(list(rect)),
+                            "/Rect": pikepdf.Array(list(ap_rect)),
                             "/NM": annot_id,
                             "/C": pikepdf.Array(list(rgb)),
                             "/T": author,
@@ -532,10 +748,28 @@ def save_pdf_annotations(
                         }
                     )
 
-                    if rec.kind == "highlight":
+                    if is_callout:
+                        d["/Subj"] = sanitize_note_category(getattr(rec, "category", "General"))
+                        d["/DA"] = "/Helv 9 Tf 0.06 0.09 0.16 rg"
+                        d["/IT"] = pikepdf.Name("/FreeTextCallout" if has_callout else "/FreeText")
+                        d["/RD"] = pikepdf.Array(rd)
+                        d["/BS"] = pikepdf.Dictionary({"/W": 1, "/S": pikepdf.Name("/S")})
+                        d["/TRODAINoteKind"] = pikepdf.Name("/StickyCallout")
+                        d["/TRODAIBoxRect"] = pikepdf.Array(list(rect))
+                        if has_callout and cl is not None:
+                            d["/CL"] = pikepdf.Array(cl)
+                            d["/LE"] = pikepdf.Name("/ClosedArrow")
+                        anchor = getattr(rec, "anchor_pdf", None)
+                        if anchor is not None and len(anchor) >= 2:
+                            d["/TRODAIAnchor"] = pikepdf.Array([float(anchor[0]), float(anchor[1])])
+                        ap_stream = _build_callout_ap_stream(
+                            pdf, pikepdf, outer_rect, rect, rgb, rec, anchor, edge_pt
+                        )
+                    elif rec.kind == "highlight":
                         x0, y0, x1, y1 = rect
                         d["/QuadPoints"] = pikepdf.Array([x0, y1, x1, y1, x0, y0, x1, y0])
                         d["/CA"] = max(0.15, min(0.85, float(rec.opacity)))
+                        ap_stream = _build_ap_stream(pdf, pikepdf, rec.kind, rect, rgb, rec)
                     elif rec.kind == "text":
                         d["/Name"] = pikepdf.Name("/Comment")
                         d["/Subj"] = sanitize_note_category(getattr(rec, "category", "General"))
@@ -543,6 +777,7 @@ def save_pdf_annotations(
                         anchor = getattr(rec, "anchor_pdf", None)
                         if anchor is not None and len(anchor) >= 2:
                             d["/TRODAIAnchor"] = pikepdf.Array([float(anchor[0]), float(anchor[1])])
+                        ap_stream = _build_ap_stream(pdf, pikepdf, rec.kind, rect, rgb, rec)
                     elif rec.kind == "ink":
                         ink_list = pikepdf.Array(
                             [
@@ -558,15 +793,19 @@ def save_pdf_annotations(
                         d["/BS"] = pikepdf.Dictionary(
                             {"/W": max(0.5, min(24.0, float(rec.stroke_width))), "/S": pikepdf.Name("/S")}
                         )
+                        ap_stream = _build_ap_stream(pdf, pikepdf, rec.kind, rect, rgb, rec)
                     elif rec.kind == "freetext":
                         d["/DA"] = f"/Helv 10 Tf {rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} rg"
+                        ap_stream = _build_ap_stream(pdf, pikepdf, rec.kind, rect, rgb, rec)
                     elif rec.kind == "popup":
                         d["/Open"] = True
+                        ap_stream = None
+                    else:
+                        ap_stream = None
 
-                    ap_stream = _build_ap_stream(pdf, pikepdf, rec.kind, rect, rgb, rec)
                     if ap_stream is not None:
                         d["/AP"] = pikepdf.Dictionary({"/N": ap_stream})
-                        page_managed_aps.setdefault(page_idx, []).append((rect, ap_stream))
+                        page_managed_aps.setdefault(page_idx, []).append((ap_rect, ap_stream))
 
                     indirect = pdf.make_indirect(d)
                     id_map[annot_id] = indirect

@@ -376,64 +376,101 @@ class PdfTabPage(QWidget):
         backdrop_layout.setContentsMargins(6, 6, 6, 6)
         backdrop_layout.setSpacing(6)
 
-        # Ink / Touch Writing Bar (hidden unless user explicitly enables from right rail!)
+        # Ink / Touch Writing Bar (icon-only ribbon with vertically centered swatches)
         self.annot_bar = QFrame(self.backdrop)
         self.annot_bar.setObjectName("CardPanel")
         self.annot_bar.setVisible(False)
-        annot_flow = FlowLayout(self.annot_bar, margin=6, h_spacing=6, v_spacing=4)
+        annot_row = QHBoxLayout(self.annot_bar)
+        annot_row.setContentsMargins(8, 4, 8, 4)
+        annot_row.setSpacing(4)
+
+        self._annot_seps: list[QFrame] = []
+        self._active_swatch_hex: str = CLASSIC_HIGHLIGHT_PALETTE[0]
+        self._tool_icon_map: dict[str, str] = {
+            "select": "cursor",
+            "highlight": "highlighter",
+            "free_highlight": "free_highlight",
+            "note": "comment",
+            "ink": "ink",
+            "eraser": "eraser",
+        }
+
+        def _add_annot_sep() -> None:
+            sep = QFrame(self.annot_bar)
+            sep.setFrameShape(QFrame.Shape.VLine)
+            sep.setFixedWidth(1)
+            sep.setFixedHeight(18)
+            sep.setStyleSheet("background-color: #334155;")
+            annot_row.addWidget(sep, 0, Qt.AlignmentFlag.AlignVCenter)
+            self._annot_seps.append(sep)
 
         self._tool_btns: dict[str, AdaptiveButton] = {}
-        for mode_id, i18n_key in (
-            ("select", "viewer.tool.select"),
-            ("highlight", "viewer.tool.highlight"),
-            ("free_highlight", "viewer.tool.free_highlight"),
-            ("note", "viewer.tool.note"),
-            ("ink", "viewer.tool.ink"),
-            ("eraser", "viewer.tool.eraser"),
-        ):
-            btn = AdaptiveButton(_tv(i18n_key, self._lang), self.annot_bar, role="ModeTab")
+        for mode_id in ("select", "highlight", "free_highlight", "note", "ink", "eraser"):
+            btn = AdaptiveButton("", self.annot_bar, role="ModeTab")
+            btn.setProperty("iconOnly", "true")
             btn.setCheckable(True)
             btn.setChecked(mode_id == "select")
-            btn.setMinimumHeight(26)
-            btn.setStyleSheet("padding: 3px 9px; font-size: 11px;")
+            btn.setFixedSize(30, 30)
+            btn.setIconSize(QSize(16, 16))
             btn.clicked.connect(lambda _=False, m=mode_id: self._on_annot_tool_clicked(m))
-            annot_flow.addWidget(btn)
+            annot_row.addWidget(btn, 0, Qt.AlignmentFlag.AlignVCenter)
             self._tool_btns[mode_id] = btn
 
+        _add_annot_sep()
+
+        self._swatch_host = QWidget(self.annot_bar)
+        self._swatch_host.setObjectName("TransparentHost")
+        self._swatch_host.setFixedHeight(30)
+        sw_lay = QHBoxLayout(self._swatch_host)
+        sw_lay.setContentsMargins(2, 0, 2, 0)
+        sw_lay.setSpacing(5)
+        sw_lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self._swatch_btns: list[QPushButton] = []
         for col_hex in CLASSIC_HIGHLIGHT_PALETTE:
-            sw = QPushButton("", self.annot_bar)
+            sw = QPushButton("", self._swatch_host)
             sw.setFixedSize(18, 18)
-            sw.setStyleSheet(f"background-color: {col_hex}; border: 1px solid #334155; padding: 0px;")
+            sw.setProperty("colorHex", col_hex)
+            sw.setToolTip(col_hex)
             sw.clicked.connect(lambda _=False, c=col_hex: self._on_color_swatch_clicked(c))
-            annot_flow.addWidget(sw)
+            sw_lay.addWidget(sw, 0, Qt.AlignmentFlag.AlignVCenter)
             self._swatch_btns.append(sw)
+        annot_row.addWidget(self._swatch_host, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.touch_write_btn = AdaptiveButton(_tv("viewer.tool.touch_write", self._lang), self.annot_bar, role="ModeTab")
+        _add_annot_sep()
+
+        self.touch_write_btn = AdaptiveButton("", self.annot_bar, role="ModeTab")
+        self.touch_write_btn.setProperty("iconOnly", "true")
         self.touch_write_btn.setCheckable(True)
-        self.touch_write_btn.setMinimumHeight(26)
-        self.touch_write_btn.setStyleSheet("padding: 3px 9px; font-size: 11px;")
+        self.touch_write_btn.setFixedSize(30, 30)
+        self.touch_write_btn.setIconSize(QSize(16, 16))
         self.touch_write_btn.clicked.connect(self._on_touch_write_toggled)
-        annot_flow.addWidget(self.touch_write_btn)
+        annot_row.addWidget(self.touch_write_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.undo_annot_btn = AdaptiveButton(_tv("viewer.tool.undo", self._lang), self.annot_bar, role="GhostAction")
-        self.undo_annot_btn.setMinimumHeight(26)
-        self.undo_annot_btn.setStyleSheet("padding: 3px 9px; font-size: 11px;")
+        _add_annot_sep()
+
+        self.undo_annot_btn = AdaptiveButton("", self.annot_bar, role="GhostAction")
+        self.undo_annot_btn.setProperty("iconOnly", "true")
+        self.undo_annot_btn.setFixedSize(30, 30)
+        self.undo_annot_btn.setIconSize(QSize(16, 16))
         self.undo_annot_btn.clicked.connect(self._undo_last_annotation)
-        annot_flow.addWidget(self.undo_annot_btn)
+        annot_row.addWidget(self.undo_annot_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.save_annot_btn = AdaptiveButton(_tv("viewer.save", self._lang), self.annot_bar, role="GhostAction")
-        self.save_annot_btn.setMinimumHeight(26)
-        self.save_annot_btn.setStyleSheet("padding: 3px 9px; font-size: 11px;")
+        self.save_annot_btn = AdaptiveButton("", self.annot_bar, role="GhostAction")
+        self.save_annot_btn.setProperty("iconOnly", "true")
+        self.save_annot_btn.setFixedSize(30, 30)
+        self.save_annot_btn.setIconSize(QSize(16, 16))
         self.save_annot_btn.clicked.connect(self.save_document)
-        annot_flow.addWidget(self.save_annot_btn)
+        annot_row.addWidget(self.save_annot_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        annot_row.addStretch(1)
 
         self.close_annot_btn = QPushButton("", self.annot_bar)
         self.close_annot_btn.setProperty("role", "GhostAction")
-        self.close_annot_btn.setFixedSize(26, 26)
-        self.close_annot_btn.setStyleSheet("padding: 2px;")
+        self.close_annot_btn.setProperty("iconOnly", "true")
+        self.close_annot_btn.setFixedSize(30, 30)
+        self.close_annot_btn.setIconSize(QSize(14, 14))
         self.close_annot_btn.clicked.connect(lambda: self.set_annotation_bar_visible(False))
-        annot_flow.addWidget(self.close_annot_btn)
+        annot_row.addWidget(self.close_annot_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         backdrop_layout.addWidget(self.annot_bar)
 
@@ -497,6 +534,7 @@ class PdfTabPage(QWidget):
             c.touch_writing_changed.connect(self._on_canvas_touch_changed)
             c.zoom_delta_requested.connect(lambda d: self.set_zoom(self.zoom + (d * max(1.0, self.zoom * 0.55))))
             c.pan_delta_requested.connect(self._pan_scroll_by)
+            c.link_page_requested.connect(self.set_page)
             if not self._continuous_scroll:
                 c.setVisible(idx == self.current_page)
             self.page_host_layout.addWidget(c, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -534,10 +572,21 @@ class PdfTabPage(QWidget):
             btn.setChecked(mid == active_mode)
             btn.blockSignals(False)
 
+    def _refresh_annot_swatch_borders(self) -> None:
+        p = get_palette(self._mode)
+        for sw in self._swatch_btns:
+            c_hex = str(sw.property("colorHex") or "")
+            is_sel = c_hex.upper() == self._active_swatch_hex.upper()
+            b_width = "2px" if is_sel else "1px"
+            b_color = p["accent"] if is_sel else p["border_strong"]
+            sw.setStyleSheet(f"background-color: {c_hex}; border: {b_width} solid {b_color}; padding: 0px;")
+
     def _on_color_swatch_clicked(self, col_hex: str) -> None:
+        self._active_swatch_hex = col_hex
         for c in self._page_canvases:
             c.set_highlight_color(col_hex)
             c.set_ink_color(col_hex)
+        self._refresh_annot_swatch_borders()
 
     def _on_touch_write_toggled(self, checked: bool) -> None:
         for c in self._page_canvases:
@@ -932,16 +981,71 @@ class PdfTabPage(QWidget):
         self.page_words_ready.emit(words)
 
     def set_zoom(self, zoom: float) -> None:
-        self.zoom = max(0.10, min(12.0, round(float(zoom), 2)))
+        target_zoom = max(0.10, min(12.0, round(float(zoom), 2)))
+        vbar = self.scroll.verticalScrollBar()
+        hbar = self.scroll.horizontalScrollBar()
+        vp_w = max(1, self.scroll.viewport().width())
+        vp_h = max(1, self.scroll.viewport().height())
+        v_center = vbar.value() + vp_h * 0.5
+        h_center = hbar.value() + vp_w * 0.5
+
+        anchor_idx = 0
+        rel_x = 0.5
+        rel_y = 0.0
+        if self._page_canvases:
+            if self._continuous_scroll:
+                best_idx = min(self.current_page, len(self._page_canvases) - 1)
+                best_dist = 10**12
+                found_inside = False
+                for idx, c in enumerate(self._page_canvases):
+                    top = float(c.y())
+                    bot = top + max(1.0, float(c.height()))
+                    if top <= v_center <= bot:
+                        anchor_idx = idx
+                        found_inside = True
+                        break
+                    mid = (top + bot) * 0.5
+                    dist = abs(mid - v_center)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_idx = idx
+                if not found_inside:
+                    anchor_idx = best_idx
+            else:
+                anchor_idx = max(0, min(self.current_page, len(self._page_canvases) - 1))
+
+            c_old = self._page_canvases[anchor_idx]
+            rel_y = (v_center - float(c_old.y())) / max(1.0, float(c_old.height()))
+            rel_x = (h_center - float(c_old.x())) / max(1.0, float(c_old.width()))
+
+        self.zoom = target_zoom
         self._rendered_signatures.clear()
         for c in self._page_canvases:
             c.set_rotation_and_zoom(self.rotation, self.zoom)
-        if self._continuous_scroll:
+
+        def _restore_anchor() -> None:
+            if not shiboken6.isValid(self) or abs(self.zoom - target_zoom) > 1e-4:
+                return
+            if not (0 <= anchor_idx < len(self._page_canvases)):
+                return
+            self.page_host_layout.activate()
+            self.page_host.adjustSize()
+            c_new = self._page_canvases[anchor_idx]
+            cur_vp_w = max(1, self.scroll.viewport().width())
+            cur_vp_h = max(1, self.scroll.viewport().height())
+            new_v = int(round(c_new.y() + rel_y * max(1, c_new.height()) - cur_vp_h * 0.5))
+            new_h = int(round(c_new.x() + rel_x * max(1, c_new.width()) - cur_vp_w * 0.5))
             self._programmatic_scroll = True
             try:
-                self.scroll.verticalScrollBar().setValue(max(0, self.pdf_canvas.y() - 12))
+                vbar.setValue(max(vbar.minimum(), min(vbar.maximum(), new_v)))
+                hbar.setValue(max(hbar.minimum(), min(hbar.maximum(), new_h)))
+                self.current_page = anchor_idx
+                self.pdf_canvas = c_new
             finally:
                 self._programmatic_scroll = False
+
+        _restore_anchor()
+        QTimer.singleShot(0, _restore_anchor)
         self.render_visible_pages()
         self.state_changed.emit()
 
@@ -1086,10 +1190,14 @@ class PdfTabPage(QWidget):
             ("ink", "viewer.tool.ink"),
             ("eraser", "viewer.tool.eraser"),
         ):
-            self._tool_btns[mid].setText(_tv(i18n_key, lang))
-        self.touch_write_btn.setText(_tv("viewer.tool.touch_write", lang))
-        self.undo_annot_btn.setText(_tv("viewer.tool.undo", lang))
-        self.save_annot_btn.setText(_tv("viewer.save", lang))
+            self._tool_btns[mid].setText("")
+            self._tool_btns[mid].setToolTip(_tv(i18n_key, lang))
+        self.touch_write_btn.setText("")
+        self.touch_write_btn.setToolTip(_tv("viewer.tool.touch_write", lang))
+        self.undo_annot_btn.setText("")
+        self.undo_annot_btn.setToolTip(_tv("viewer.tool.undo", lang))
+        self.save_annot_btn.setText("")
+        self.save_annot_btn.setToolTip(_tv("viewer.save", lang))
         self.close_annot_btn.setToolTip(_tv("viewer.rail.close", lang))
         for c in self._page_canvases:
             c.retranslate(lang)
@@ -1101,10 +1209,17 @@ class PdfTabPage(QWidget):
         self.backdrop.set_profile(profile)
         self.toc_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
         self.thumb_close_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
-        self.close_annot_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=12))
+        for mid, icon_name in self._tool_icon_map.items():
+            if mid in self._tool_btns:
+                self._tool_btns[mid].setIcon(load_svg_icon(icon_name, color=p["icon_color"], size=16))
+        self.touch_write_btn.setIcon(load_svg_icon("touch", color=p["icon_color"], size=16))
+        self.close_annot_btn.setIcon(load_svg_icon("close", color=p["icon_color"], size=14))
         self._sync_detach_icons()
-        self.undo_annot_btn.setIcon(load_svg_icon("reset", color=p["icon_color"], size=13))
-        self.save_annot_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=13))
+        self.undo_annot_btn.setIcon(load_svg_icon("reset", color=p["icon_color"], size=16))
+        self.save_annot_btn.setIcon(load_svg_icon("check", color=p["icon_color"], size=16))
+        for sep in self._annot_seps:
+            sep.setStyleSheet(f"background-color: {p['border_strong']};")
+        self._refresh_annot_swatch_borders()
         if self._floating_thumb_win is not None and shiboken6.isValid(self._floating_thumb_win):
             self._floating_thumb_win.apply_theme(self._mode)
         if self._floating_toc_win is not None and shiboken6.isValid(self._floating_toc_win):

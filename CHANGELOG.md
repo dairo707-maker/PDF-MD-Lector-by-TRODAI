@@ -3,6 +3,21 @@
 All notable changes to **PDF/MD Lector by TRODAI** are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-11-26
+
+### Added
+- **ISO 32000 Native `/FreeTextCallout` Sticky Notes (`core/pdf_annotations.py`):** Visible sticky notes (`>= 48x30` pt) now persist natively as ISO 32000 `/Subtype /FreeText` annotations with `/IT /FreeTextCallout` (when anchored externally), `/CL` callout coordinates, `/RD` box insets, `/Subj` category, `/Contents`, and rich Form XObject `/AP /N` appearance streams rendering the leader line, anchor dot, category header, and wrapped note text in external PDF viewers (Adobe Acrobat, Edge, Chrome, Firefox, Preview) with full lossless roundtrip back into `PDF/MD Lector`.
+- **Interactive PDF Hyperlinks (`core/pdf_engine.py`, `ui/pdf_canvas.py`, `ui/viewer_view.py`):** Extracts both explicit `/Link` annotations (external `http`/`https`/`mailto` URIs and internal `/GoTo` page destinations) and plain-text web URLs via PDFium, rejecting unsafe URI schemes (`javascript:`, `file:`, etc.), showing destination tooltips with `PointingHandCursor`, and navigating pages or opening URLs on clean click.
+- **Text Proximity IBeam Cursor (`ui/pdf_canvas.py`):** Cached word-box proximity hit-testing dynamically switches the pointer to standard `IBeamCursor` near selectable text in `select` mode while keeping `PointingHandCursor` on links/notes and `ArrowCursor` on empty margins.
+
+### Fixed
+- **Zoom Anchor Position Preservation (`ui/viewer_view.py`):** `PdfTabPage.set_zoom(...)` now locks and restores the viewport center `(anchor_page_idx, rel_x, rel_y)` across continuous and single-page modes on every Zoom In / Zoom Out / Wheel / `Ctrl+±` action instead of jumping back to the top of the page.
+- **Icon-Only Annotation Ribbon & Centered Color Swatches (`ui/viewer_view.py`, `assets/icons/cursor.svg`, `assets/icons/free_highlight.svg`, `assets/icons/touch.svg`):** Redesigned `annot_bar` with uniform `30x30` polygonal icon-only tool buttons + tooltips, vertical group separators, and vertically centered `18x18` color swatches inside a `30px` host strip.
+- **Conditional 1-Click Updater & HTML Release Notes (`ui/about_updater_dialog.py`, `core/updater.py`):**
+  - Replaced raw Markdown release notes (`QPlainTextEdit`) with safe Markdown-to-HTML rendering (`QTextBrowser`, `setOpenExternalLinks(False)`).
+  - Hid the install action and progress bar when up-to-date or offline, surfacing a single 1-click **"Actualizar y reiniciar ahora"** button when a new GitHub Release is detected.
+  - Fixed keyword signature mismatch in `launch_detached_update(installer_path=..., relaunch_exe=...)` that prevented installer launch after download verification.
+
 ## [0.4.0] - 2026-11-26
 
 ### Fixed
