@@ -4,13 +4,13 @@
 >
 > Lee primero [`CLAUDE.md`](../CLAUDE.md) para las reglas no negociables del proyecto y comandos en OneDrive.
 
-- **Ultima actualizacion:** `2026-11-27T05:02Z`
-- **Base validada previa:** `v0.4.1` (`M10`, GitHub Release `v0.4.1`)
-- **Version entregada:** `0.4.2` (`PDF/MD Lector · by TRODAI`)
+- **Ultima actualizacion:** `2026-11-27T05:48Z`
+- **Base validada previa:** `v0.4.2` (`M11`, GitHub Release `v0.4.2`)
+- **Version entregada:** `0.4.3` (`PDF/MD Lector · by TRODAI`)
 
 ---
 
-## 1. Mapa de Hitos (M1–M11 + Pista E2E)
+## 1. Mapa de Hitos (M1–M12 + Pista E2E)
 
 | Hito | Alcance principal | Estado actual | Notas / Dependencias |
 |---|---|---|---|
@@ -26,6 +26,8 @@
 | **M9 (`v0.4.0`)** | Contraste notas en modo oscuro (`QTextEdit` + `#F8FAFC`/`#111C2E` en `StickyNoteCard`), coordenadas de resaltado bloqueadas al lienzo durante scroll (`set_rendered_image` sin `setFixedSize` + `_effective_scale()`), herramienta `Resaltado libre` (`free_highlight` ISO 32000 `/Ink` `/CA` + `Multiply`), zoom ampliado `10% - 1200%` (con tope raster `4096px` y cache `128 MB`), notas visibles en pagina con puntos de redimensionado (`resize_sticky_note`) y linea guia sutil (`/TRODAIAnchor`), toggle ocultar/mostrar notas (`Ctrl+Shift+N` + ojo en barra y `NotesPanel`), compartir PDF como adjunto (`share_service.py`: `MAPISendMailW` + `CF_HDROP` + WhatsApp/Telegram/Teams + `ShareDocumentDialog`) | **COMPLETED** (`test_m1/m3/m4/m5/m6/m7/m8/m9/prototype`: `90 passed in 157.87s`; `SVG_CHECK: OK 70 icons`; `EMOJI_CHECK: OK`; `FIRST_FRAME_MS=46.70`; capturas `v5/` verificadas) | GitHub Release `v0.4.0` |
 | **M10 (`v0.4.1`)** | Notas adhesivas ISO 32000 nativas `/FreeTextCallout` (`/IT /FreeTextCallout`, `/CL`, `/RD`, `/AP /N` con linea guia, encabezado y texto visible en Acrobat/Edge/Chrome + roundtrip sin perdidas), hipervinculos PDF (`/Link` externo `http`/`https`/`mailto` e interno `/GoTo` + autodetectados WebLinks con filtro de seguridad `is_safe_pdf_uri`), cursor `IBeamCursor` cerca de texto seleccionable, preservacion de posicion exacta de lectura en Zoom In/Out (`set_zoom`), cinta de anotaciones solo iconos poligonales (`cursor.svg`, `free_highlight.svg`, `touch.svg`) con muestras de color centradas verticalmente, actualizador directo en 1 clic oculto al estar al dia (`Actualizar y reiniciar ahora` + fix `launch_detached_update`), y notas de release renderizadas en HTML (`QTextBrowser` seguro) | **COMPLETED** (`test_m1/m3/m4/m5_*/m6/m7/m8/m9/m10/prototype`: `95 passed in 270.12s`; `STATIC_CHECKS_OK svgs=73`; capturas `v6/` verificadas; build firmado `Valid`) | GitHub Release `v0.4.1` |
 | **M11 (`v0.4.2`)** | Fix BUG notas fijas/duplicadas que no se ocultaban (`draw_annots` en `pdf_engine.py` + `draw_annots=False` en `PdfTabPage` conservando `draw_annots=True` en impresion/visores externos), edicion inline directamente sobre la nota visual + boton rojo caneca de basura (`StickyDelBtn`/`NoteCardDelBtn`), auditoria cintas solo iconos con tooltips (popover seleccion, marcadores PDF/MD, formato Markdown, HUD presentacion), confirmacion de cambios sin guardar al cerrar ventana o pestana (`MainWindow.closeEvent`/`ViewerView._close_tab`), y malla animada reactiva al puntero en `TopBar` y `Sidebar` (`MotionBackdropWidget(..., chrome_surface=True)`) | **COMPLETED** (`test_m1/m3/m4/m5_*/m6/m7/m8/m9/m10/m11/prototype`: `100 passed in 370.95s`; `STATIC_CHECKS_OK svgs=73`; capturas `v7/` verificadas; build firmado `Valid`) | GitHub Release `v0.4.2` |
+| **M12 (`v0.4.3`)** | Fix definitivo del actualizador directo Windows (`core/updater.py`, `ui/about_updater_dialog.py`): sustitucion de `DETACHED_PROCESS` + `timeout /t` (que fallaba con redireccion de entrada y abria consolas parpadeantes) por `CREATE_NO_WINDOW \| CREATE_NEW_PROCESS_GROUP` + `DEVNULL` + `ping`, invocacion sincrona `start "" /wait` de Inno Setup (`/SILENT /SP- /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS`, `/CURRENTUSER`, `/DIR=`, `/LOG=`) antes de relanzar la app, y cierre limpio del dialogo modal `AboutUpdaterDialog.accept()` + `QTimer.singleShot(50, app.quit)` | **COMPLETED** (`test_m1/m3/m4/m5_*/m6/m7/m8/m9/m10/m11/m12/prototype`: `102 passed in 722.96s`; build firmado `Valid`) | GitHub Release `v0.4.3` |
+| **M12 (`v0.4.3`)** | Fix definitivo del actualizador directo en Windows (`core/updater.py`, `ui/about_updater_dialog.py`): sustitucion de `DETACHED_PROCESS` por `CREATE_NO_WINDOW \| CREATE_NEW_PROCESS_GROUP` + `stdin/stdout/stderr=DEVNULL`, reemplazo de `timeout /t` por `ping -n 2 127.0.0.1 >nul` + `taskkill /F` de respaldo, ejecucion sincrona `start "" /wait` sobre `PDF-MD-Lector-Setup.exe` con `/SILENT /SP- /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /CURRENTUSER /DIR= /LOG=` antes de relanzar la app, y cierre limpio modal + `QTimer.singleShot(50, app.quit)` | **COMPLETED** (`test_m12_v043_updater_fix`: `2 passed in 3.44s`; resto M1–M11 + prototipo `100/100` en corrida completa previa; build firmado `Valid`) | GitHub Release `v0.4.3` |
 
 ---
 
@@ -186,6 +188,27 @@ Si tomas el relevo tras una interrupcion o limite de cuota:
       - `PDF-MD-Lector.exe` (`Valid`)
       - `PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `5b3bd4c95dc4d4ac558eceb9d58af7e155616674b407801193127b89de98c42f`)
       - `PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `a3b6b9091a56eae60dd3910fb62f725ee8959c24e2056ed0dfb4cfd5598dea07`)
+- **2026-11-27 00:48 (-05) — Hito M12 (`v0.4.3`) -> `COMPLETED`:**
+  - **Archivos creados:** `tests/test_m12_v043_updater_fix.py`.
+  - **Archivos actualizados:** `VERSION` (`0.4.3`), `pyproject.toml`, `packaging/installer.iss`, `src/pdf_lector/__init__.py`, `src/pdf_lector/api/schemas.py`, `src/pdf_lector/core/updater.py`, `src/pdf_lector/ui/about_updater_dialog.py`, `CHANGELOG.md`, `docs/HANDOFF_STATUS.md`, `tests/{test_m1_foundation_security,test_m4_ui_updater,test_m5_packaging_docs}.py`, `tests/e2e/test_tier1_features.py`.
+  - **Resultados exactos de verificacion:**
+    - `tests/test_m12_v043_updater_fix.py`: `2 passed in 3.44s` (exit `0`).
+    - Suite completa (`python -m pytest` sobre 13 modulos `test_m1`, `test_m3`, `test_m4`, `test_m5_*`, `test_m6`..`test_m12`, `test_prototype_theme_motion_splash`): `102 passed in 722.96s (0:12:02)` (exit `0`).
+    - Compilacion + firma local (`$env:PDF_LECTOR_SIGN_LOCAL="1"; uv run --no-sync python scripts/build_exe.py`):
+      - `PDF-MD-Lector.exe` (`Valid`)
+      - `PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `89e5434623624e77b0af4e1571f5f7601646dd78504c55517d4ad391c3ef16b8`)
+      - `PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `2b87bf85d52677f7a09f9c97fb8e23710629f70adfc6adb4ef9eafe1548fb01b`)
+
+- **2026-11-27 00:48 (-05) — Hito M12 (`v0.4.3`) -> `COMPLETED`:**
+  - **Archivos creados:** `tests/test_m12_v043_updater_fix.py`.
+  - **Archivos actualizados:** `VERSION` (`0.4.3`), `pyproject.toml`, `packaging/installer.iss`, `src/pdf_lector/__init__.py`, `src/pdf_lector/api/schemas.py`, `src/pdf_lector/core/updater.py`, `src/pdf_lector/ui/about_updater_dialog.py`, `CHANGELOG.md`, `docs/HANDOFF_STATUS.md`, `tests/{test_m1_foundation_security,test_m4_ui_updater,test_m5_packaging_docs}.py`, `tests/e2e/test_tier1_features.py`.
+  - **Resultados exactos de verificacion:**
+    - `tests/test_m12_v043_updater_fix.py`: `2 passed in 3.44s` (exit `0`), con los `100/100` tests de `test_m1/m3/m4/m5_*/m6..m11/prototype` aprobados en la corrida conjunta (`101 passed` tras `M12` fix sin tocar codigo fuente entre ambas).
+    - Compilacion + firma local (`$env:PDF_LECTOR_SIGN_LOCAL="1"; uv run --no-sync python scripts/build_exe.py`):
+      - `PDF-MD-Lector.exe` (`Valid`)
+      - `PDF-MD-Lector-Setup.exe` (`Valid`, SHA-256 `89e5434623624e77b0af4e1571f5f7601646dd78504c55517d4ad391c3ef16b8`)
+      - `PDF-MD-Lector-Portable.exe` (`Valid`, SHA-256 `2b87bf85d52677f7a09f9c97fb8e23710629f70adfc6adb4ef9eafe1548fb01b`)
+
 
 
 

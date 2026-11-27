@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
@@ -443,8 +443,10 @@ class AboutUpdaterDialog(QDialog):
             quit_callback()
         elif QApplication.platformName() != "offscreen":
             app = QApplication.instance()
+            if self.isVisible():
+                self.accept()
             if app is not None:
-                app.quit()
+                QTimer.singleShot(50, app.quit)
         return True
 
     def apply_theme(self, mode: str) -> None:

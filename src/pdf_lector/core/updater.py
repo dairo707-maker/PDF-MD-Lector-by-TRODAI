@@ -394,24 +394,53 @@ def build_detached_update_script(
     installer_path: Path,
     relaunch_exe: Path | None = None,
     wait_pid: int | None = None,
+    log_path: Path | None = None,
 ) -> str:
     """Build detached Windows batch script clearing _MEIPASS* before running the verified installer."""
     inst = str(Path(installer_path))
     pid = int(wait_pid or os.getpid())
+    inno_flags: list[str] = [
+        "/SILENT",
+        "/SP-",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/FORCECLOSEAPPLICATIONS",
+    ]
+    if relaunch_exe is not None:
+        r_path = Path(relaunch_exe)
+        install_dir = r_path.parent
+        if "program files" not in str(install_dir).lower():
+            inno_flags.append("/CURRENTUSER")
+        if r_path.name.lower() == "pdf-md-lector.exe":
+            inno_flags.append(f'/DIR="{install_dir}"')
+    if log_path is not None:
+        inno_flags.append(f'/LOG="{Path(log_path)}"')
+    inno_arg_str = " ".join(inno_flags)
+
     lines = [
         "@echo off",
         "setlocal",
         'set "_MEIPASS="',
         'set "_MEIPASS2="',
         'set "PYTHONHOME="',
-        f"timeout /t 2 /nobreak >nul",
-        f":wait_loop",
+        "set /a tries=0",
+        "ping -n 2 127.0.0.1 >nul",
+        ":wait_loop",
         f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul',
         "if not errorlevel 1 (",
-        "  timeout /t 1 /nobreak >nul",
+        "  set /a tries+=1",
+        "  if %tries% GEQ 20 goto force_close",
+        "  ping -n 2 127.0.0.1 >nul",
         "  goto wait_loop",
         ")",
-        f'"{inst}" /SILENT /NORESTART /CLOSEAPPLICATIONS',
+        "goto run_installer",
+        ":force_close",
+        f"taskkill /F /T /PID {pid} >nul 2>&1",
+        "ping -n 2 127.0.0.1 >nul",
+        ":run_installer",
+        f'start "" /wait "{inst}" {inno_arg_str}',
+        "ping -n 2 127.0.0.1 >nul",
     ]
     if relaunch_exe is not None:
         lines.append(f'start "" "{Path(relaunch_exe)}"')
@@ -427,7 +456,7 @@ def launch_detached_update(
     has_active_tasks: bool = False,
     script_dir: Path | None = None,
 ) -> Path:
-    """Write and spawn detached update script after verifying no unsaved docs or active tasks exist."""
+    """Write and spawn detached hidden update script after verifying no unsaved docs or active tasks exist."""
     if has_unsaved_docs:
         raise RuntimeError("Cannot restart for update while documents have unsaved changes")
     if has_active_tasks:
@@ -439,19 +468,27 @@ def launch_detached_update(
     target_dir = Path(script_dir) if script_dir is not None else Path(tempfile.gettempdir()) / "TRODAI_Updater"
     target_dir.mkdir(parents=True, exist_ok=True)
     script_path = target_dir / "trodai_apply_update.bat"
+    log_path = target_dir / "setup_update.log"
     script_path.write_text(
-        build_detached_update_script(installer_path=inst, relaunch_exe=relaunch_exe),
+        build_detached_update_script(
+            installer_path=inst,
+            relaunch_exe=relaunch_exe,
+            log_path=log_path,
+        ),
         encoding="utf-8",
     )
 
     child_env = clean_meipass_env()
     flags = 0
     if IS_WINDOWS:
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(
         ["cmd.exe", "/c", str(script_path)],
         env=child_env,
         creationflags=flags,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         close_fds=True,
     )
     return script_path

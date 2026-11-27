@@ -3,6 +3,13 @@
 All notable changes to **PDF/MD Lector by TRODAI** are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-11-27
+
+### Fixed
+- **Direct In-App Windows Updater Script & Silent Relaunch (`core/updater.py`, `ui/about_updater_dialog.py`):**
+  - Fixed three root causes in `build_detached_update_script` / `launch_detached_update`: replaced `DETACHED_PROCESS` (which broke `timeout /t` with *"Input redirection is not supported"* and flashed console windows) with `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` + `stdin/stdout/stderr=DEVNULL` + `ping -n 2 127.0.0.1 >nul` delays; invoked Inno Setup via `start "" /wait` so the updater strictly waits for installation completion before relaunching; and added `/SP- /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS`, `/CURRENTUSER`, `/DIR=`, `/LOG=` plus bounded `taskkill` fallback.
+  - Closed `AboutUpdaterDialog` modal loop cleanly (`self.accept()`) and scheduled `QTimer.singleShot(50, app.quit)` so Windows releases all DLL handles immediately before setup overwrites files.
+
 ## [0.4.2] - 2026-11-26
 
 ### Fixed
