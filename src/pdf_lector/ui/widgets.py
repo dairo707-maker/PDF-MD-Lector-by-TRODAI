@@ -275,6 +275,10 @@ class StatusTag(QLabel):
         self._accent_override = accent_override
         palette = self._SOLID_THEMES[self._mode]
         bg, bd, fg = palette.get(self._tone, palette["accent"])
+        sig = (self._mode, bg, bd, fg)
+        if getattr(self, "_last_tag_sig", None) == sig:
+            return
+        self._last_tag_sig = sig
         self.setStyleSheet(
             f"background-color: {bg}; color: {fg}; border: 1px solid {bd}; "
             f"padding: 2px 6px; font-family: '{MONO_FONT_FAMILY}', 'Consolas', monospace; "

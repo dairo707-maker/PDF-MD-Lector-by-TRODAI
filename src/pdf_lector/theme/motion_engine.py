@@ -176,9 +176,7 @@ class MotionBackdropWidget(QWidget):
 
     def _surface_enabled(self) -> bool:
         if self._chrome_surface:
-            return self._profile.motion_level != "static" and (
-                self._profile.motion_preset != "none" or bool(self._profile.banner_path.strip())
-            )
+            return self._profile.motion_level != "static" and self._profile.motion_preset != "none"
         if self._is_viewer_surface:
             return self._profile.apply_to_viewer_backdrop
         return self._profile.apply_to_hub_banner
@@ -188,7 +186,21 @@ class MotionBackdropWidget(QWidget):
         self._sync_motion_state()
 
     def set_profile(self, profile: ThemeProfile) -> None:
-        self._profile = profile.sanitized(check_media_exists=False)
+        new_prof = profile.sanitized(check_media_exists=False)
+        if self._chrome_surface:
+            old_p = self._profile
+            if (
+                old_p.base_mode == new_prof.base_mode
+                and old_p.accent_override == new_prof.accent_override
+                and old_p.motion_level == new_prof.motion_level
+                and old_p.motion_preset == new_prof.motion_preset
+                and old_p.fps_cap == new_prof.fps_cap
+                and old_p.pause_on_battery_saver == new_prof.pause_on_battery_saver
+                and abs(old_p.opacity - new_prof.opacity) < 1e-4
+            ):
+                self._profile = new_prof
+                return
+        self._profile = new_prof
         self._reload_media()
         self._sync_motion_state()
         self.update()
@@ -204,7 +216,7 @@ class MotionBackdropWidget(QWidget):
 
     def _reload_media(self) -> None:
         enabled = self._surface_enabled()
-        raw_path = self._profile.banner_path.strip()
+        raw_path = "" if self._chrome_surface else self._profile.banner_path.strip()
         media_key = (enabled, raw_path)
         if media_key == self._loaded_media_key:
             return

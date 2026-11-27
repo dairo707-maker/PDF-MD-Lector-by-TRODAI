@@ -196,6 +196,7 @@ class ThemeStudioView(QWidget):
         self._slider_emit_timer.setInterval(45)
         self._slider_emit_timer.timeout.connect(self._flush_pending_slider_emit)
         self._last_synced_mode: str = ""
+        self._slider_internal_emit: bool = False
 
         self.auto_scrim_chk = QCheckBox(media_card)
         self.auto_scrim_chk.toggled.connect(lambda v: self._update_profile(auto_scrim=bool(v)))
@@ -400,7 +401,11 @@ class ThemeStudioView(QWidget):
                 self._slider_emit_timer.start()
         else:
             self._slider_emit_timer.stop()
-            self.profile_changed.emit(updated)
+            self._slider_internal_emit = True
+            try:
+                self.profile_changed.emit(updated)
+            finally:
+                self._slider_internal_emit = False
 
     def _flush_pending_slider_emit(self) -> None:
         if hasattr(self, "_slider_emit_timer"):
@@ -419,6 +424,8 @@ class ThemeStudioView(QWidget):
         self.profile_changed.emit(profile)
 
     def sync_from_profile(self, profile: ThemeProfile) -> None:
+        if self._slider_internal_emit and profile == self._profile:
+            return
         self._syncing = True
         try:
             self._profile = profile
